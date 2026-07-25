@@ -193,7 +193,29 @@ export default function PropertyDetails() {
   );
 
   if (!data) return (
-    <div className="min-h-screen bg-[#0b0f19] flex items-center justify-center text-red-400">Property not found.</div>
+    <div className="min-h-screen bg-[#0b0f19] flex flex-col items-center justify-center text-slate-300 p-6 text-center">
+      <div className="glass-panel p-8 rounded-2xl border border-white/10 max-w-md w-full space-y-4">
+        <Building className="h-12 w-12 text-violet-400 mx-auto" />
+        <h2 className="text-xl font-bold text-white">Property Not Found</h2>
+        <p className="text-sm text-slate-400">
+          Property #{id} could not be found in the current PropValue AI database. Explore our active property listings or value a custom location.
+        </p>
+        <div className="flex gap-3 pt-2">
+          <button
+            onClick={() => navigate('/properties')}
+            className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-bold text-xs transition shadow-lg shadow-violet-600/25"
+          >
+            Browse Properties
+          </button>
+          <button
+            onClick={() => navigate('/valuation')}
+            className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold text-xs transition border border-white/10"
+          >
+            AI Valuation
+          </button>
+        </div>
+      </div>
+    </div>
   );
 
   const { property: p, nearby_google_places: places, places_metadata, historical_prices, rental_yield, image_gallery } = data;
