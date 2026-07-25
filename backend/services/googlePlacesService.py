@@ -1,76 +1,60 @@
-"""
-Google Places Service — Places API (New) Nearby Search (searchNearby)
-
-Features:
-1. Calls https://places.googleapis.com/v1/places:searchNearby using FieldMask optimization.
-2. Uses supported Google Places (New) place types.
-3. Computes straight-line Haversine distance in km from target coordinates to each place.
-4. Caches results in-memory and in SQLite database to optimize cost and avoid redundant API calls.
-5. Formats place category names for UI presentation.
-"""
-
 import os
 import time
 import requests
 from math import radians, cos, sin, asin, sqrt
-from datetime import datetime
-
-# Centralized Search Radii Configuration (meters)
-PRIMARY_SEARCH_RADIUS_M = 3000.0   # 3 km
-EXTENDED_SEARCH_RADIUS_M = 5000.0  # 5 km
 
 # Supported Google Places API (New) Place Types
 SUPPORTED_PLACE_TYPES = [
     "hospital",
     "medical_clinic",
+    "pharmacy",
     "school",
+    "primary_school",
+    "secondary_school",
     "university",
     "subway_station",
     "train_station",
     "bus_station",
+    "transit_station",
     "shopping_mall",
     "supermarket",
     "park",
-    "pharmacy",
     "bank",
     "restaurant",
     "gym"
 ]
 
-# Mapping from Google primaryType/types to UI Category
-TYPE_TO_UI_CATEGORY = {
-    "hospital": "Hospital",
-    "medical_clinic": "Clinic",
-    "doctor": "Clinic",
-    "pharmacy": "Pharmacy",
-    "school": "School",
-    "primary_school": "School",
-    "secondary_school": "School",
-    "university": "University / College",
-    "subway_station": "Metro Station",
-    "train_station": "Railway Station",
-    "bus_station": "Bus Station",
-    "transit_station": "Transit Station",
-    "shopping_mall": "Shopping Mall",
-    "supermarket": "Supermarket",
-    "grocery_store": "Supermarket",
-    "park": "Park",
-    "bank": "Bank",
-    "restaurant": "Restaurant",
-    "gym": "Gym"
-}
+def resolve_ui_category_and_group(primary_type: str, types_list: list[str]) -> tuple[str, str]:
+    """Pattern-matching category & filter group resolver for Google Places API (New)"""
+    all_types_str = " ".join([primary_type] + (types_list or [])).lower()
 
-# Grouping categories into UI Filter Tabs
-UI_FILTER_GROUPS = {
-    "Healthcare": ["Hospital", "Clinic", "Pharmacy"],
-    "Education": ["School", "University / College"],
-    "Transport": ["Metro Station", "Railway Station", "Bus Station", "Transit Station"],
-    "Shopping": ["Shopping Mall", "Supermarket"],
-    "Parks": ["Park"],
-    "Essentials": ["Bank", "Restaurant", "Gym"]
-}
+    if any(k in all_types_str for k in ["hospital", "medical_clinic", "doctor"]):
+        return "Hospital", "Healthcare"
+    if any(k in all_types_str for k in ["pharmacy", "chemist", "drugstore"]):
+        return "Pharmacy", "Healthcare"
+    if any(k in all_types_str for k in ["school", "university", "college"]):
+        return "School", "Education"
+    if any(k in all_types_str for k in ["subway", "metro"]):
+        return "Metro Station", "Transport"
+    if any(k in all_types_str for k in ["train_station", "railway"]):
+        return "Railway Station", "Transport"
+    if any(k in all_types_str for k in ["bus_station", "transit"]):
+        return "Bus Station", "Transport"
+    if any(k in all_types_str for k in ["shopping_mall", "mall"]):
+        return "Shopping Mall", "Shopping"
+    if any(k in all_types_str for k in ["supermarket", "hypermarket", "grocery"]):
+        return "Supermarket", "Shopping"
+    if any(k in all_types_str for k in ["park", "garden"]):
+        return "Park", "Parks"
+    if any(k in all_types_str for k in ["bank", "atm"]):
+        return "Bank", "Essentials"
+    if any(k in all_types_str for k in ["restaurant", "food", "cafe", "bakery"]):
+        return "Restaurant", "Essentials"
+    if any(k in all_types_str for k in ["gym", "fitness", "sports"]):
+        return "Gym", "Essentials"
 
-# In-memory cache: (lat_round, lon_round, radius) -> (timestamp, data)
+    return "Amenity", "Essentials"
+
 _PLACES_CACHE = {}
 CACHE_TTL_SECONDS = 86400  # 24 Hours Cache TTL
 
@@ -96,7 +80,6 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
     cache_key = (target_lat, target_lon, radius)
     now_ts = time.time()
 
-    # 1. Check in-memory cache
     if cache_key in _PLACES_CACHE:
         cache_time, cached_result = _PLACES_CACHE[cache_key]
         if now_ts - cache_time < CACHE_TTL_SECONDS:
@@ -109,7 +92,7 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.rating,places.userRatingCount,places.googleMapsUri,places.businessStatus",
-        "Referer": "http://localhost:3000/"  # Required by GCP API key referrer restrictions
+        "Referer": "http://localhost:3000/"
     }
 
     payload = {
@@ -143,59 +126,36 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
                     continue
 
                 dist_km = calculate_haversine_distance(target_lat, target_lon, p_lat, p_lon)
+                name = p.get("displayName", {}).get("text") or "Nearby Place"
                 primary_type = p.get("primaryType", "")
-                all_types = p.get("types", [])
+                types_list = p.get("types", [])
 
-                # Map to UI Category
-                cat_name = TYPE_TO_UI_CATEGORY.get(primary_type)
-                if not cat_name:
-                    for t in all_types:
-                        if t in TYPE_TO_UI_CATEGORY:
-                            cat_name = TYPE_TO_UI_CATEGORY[t]
-                            break
-                if not cat_name:
-                    cat_name = primary_type.replace("_", " ").title() if primary_type else "Amenity"
-
-                # Find filter group
-                group_name = "Essentials"
-                for grp, cats in UI_FILTER_GROUPS.items():
-                    if cat_name in cats:
-                        group_name = grp
-                        break
-
-                display_name = p.get("displayName", {}).get("text", "Nearby Place")
+                category, group = resolve_ui_category_and_group(primary_type, types_list)
 
                 places_list.append({
-                    "place_id": p.get("id", ""),
-                    "name": display_name,
-                    "category": cat_name,
-                    "group": group_name,
+                    "place_id": p.get("id"),
+                    "name": name,
+                    "primary_type": primary_type,
+                    "category": category,
+                    "group": group,
                     "latitude": p_lat,
                     "longitude": p_lon,
                     "distance_km": dist_km,
-                    "rating": p.get("rating", 0.0),
-                    "user_ratings_total": p.get("userRatingCount", 0),
+                    "rating": float(p.get("rating", 0.0) or 0.0),
+                    "user_ratings_total": int(p.get("userRatingCount", 0) or 0),
                     "address": p.get("formattedAddress", ""),
-                    "google_maps_uri": p.get("googleMapsUri", ""),
-                    "business_status": p.get("businessStatus", "OPERATIONAL")
+                    "google_maps_uri": p.get("googleMapsUri", "")
                 })
 
-            # Sort places by distance
             places_list.sort(key=lambda x: x["distance_km"])
-
-        else:
-            print(f"[googlePlacesService] API error {response.status_code}: {response.text[:200]}")
     except Exception as e:
-        print(f"[googlePlacesService] Request exception: {e}")
+        print(f"[GooglePlacesService] Request failed: {e}")
 
-    result_payload = {
-        "status": "SUCCESS" if places_list else "EMPTY",
-        "data_source": "Current Google Places API (New)",
-        "last_updated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "total_count": len(places_list),
-        "places": places_list
+    result = {
+        "places": places_list,
+        "data_source": "Google Places API (New)",
+        "count": len(places_list)
     }
 
-    # Store in cache
-    _PLACES_CACHE[cache_key] = (now_ts, result_payload)
-    return result_payload
+    _PLACES_CACHE[cache_key] = (now_ts, result)
+    return result
