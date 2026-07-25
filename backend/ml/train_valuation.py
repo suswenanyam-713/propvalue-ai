@@ -5,7 +5,7 @@ import numpy as np
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from xgboost import XGBRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 
 # Set directory path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -25,7 +25,6 @@ def train_models():
 
     for col in categorical_cols:
         le = LabelEncoder()
-        # Convert to string to avoid mixed types
         df[col] = df[col].astype(str)
         df[col] = le.fit_transform(df[col])
         encoders[col] = le
@@ -33,11 +32,9 @@ def train_models():
     # Features and Targets
     features = ["City", "Locality", "Latitude", "Longitude", "Property_Type", "Area_sqft", "Bedrooms", "Bathrooms", "Floor", "Age", "Parking", "Furnishing"]
     
-    # Handle Floor col if it doesn't exist
     if "Floor" not in df.columns:
         df["Floor"] = 1
     
-    # Map parking and furnishing to encoded codes
     X = df[features]
     y_price = df["Price_INR"]
     y_investment = df["Investment_Score"]
@@ -48,12 +45,11 @@ def train_models():
     _, _, y_inv_train, y_inv_test = train_test_split(X, y_investment, test_size=0.2, random_state=42)
     _, _, y_risk_train, y_risk_test = train_test_split(X, y_risk, test_size=0.2, random_state=42)
 
-    # Create ml directory if it doesn't exist
     os.makedirs("backend/ml/saved_models", exist_ok=True)
 
     # 1. Price Model
-    print("Training Property Price Valuation XGBoost Model...")
-    price_model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+    print("Training Property Price Valuation Gradient Boosting Model...")
+    price_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
     price_model.fit(X_train, y_price_train)
     price_score = price_model.score(X_test, y_price_test)
     print(f"Price model R2 Score on test set: {price_score:.4f}")
@@ -61,7 +57,7 @@ def train_models():
 
     # 2. Investment Score Model
     print("Training Investment Score Model...")
-    inv_model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
+    inv_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
     inv_model.fit(X_train, y_inv_train)
     inv_score = inv_model.score(X_test, y_inv_test)
     print(f"Investment Score model R2 Score on test set: {inv_score:.4f}")
@@ -69,7 +65,7 @@ def train_models():
 
     # 3. Risk Score Model
     print("Training Risk Score Model...")
-    risk_model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
+    risk_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
     risk_model.fit(X_train, y_risk_train)
     risk_score = risk_model.score(X_test, y_risk_test)
     print(f"Risk Score model R2 Score on test set: {risk_score:.4f}")
