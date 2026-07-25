@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import os
 from dotenv import load_dotenv
 
@@ -14,23 +15,15 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend clients
-origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:5173",
-    "http://localhost:8000",
-    "*"
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register routes
+# Register all API routes FIRST
 app.include_router(routes_auth.router)
 app.include_router(routes_val.router)
 app.include_router(routes_prop.router)
@@ -44,6 +37,15 @@ def read_root():
         "service": "AI Property Valuation API",
         "docs_url": "/docs"
     }
+
+# Mount React SPA build as static files LAST (catch-all fallback)
+# On Vercel: the build copies frontend/dist/* to api/static/
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATIC_DIR = os.path.join(BASE_DIR, "api", "static")
+
+if os.path.exists(STATIC_DIR):
+    # html=True enables SPA mode: serves index.html for unmatched routes
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
