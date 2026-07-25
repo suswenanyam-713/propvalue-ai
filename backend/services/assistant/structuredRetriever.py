@@ -1,13 +1,14 @@
+import os
 import numpy as np
 import pandas as pd
-import os
 from sqlalchemy.orm import Session
 from backend.database.models import Property, HistoricalPrice, MarketData
 from backend.services.googlePlacesService import fetch_google_nearby_places
 from backend.services.locationResolutionService import resolve_property_location
 
-HISTORICAL_CSV = "Dataset/Historical_Prices_10000.csv"
-LIVE_MARKET_CSV = "Dataset/Live_Market_10000.csv"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+HISTORICAL_CSV = os.path.join(BASE_DIR, "Dataset", "Historical_Prices_10000.csv")
+LIVE_MARKET_CSV = os.path.join(BASE_DIR, "Dataset", "Live_Market_10000.csv")
 
 def get_property_by_id(prop_id: int, db: Session) -> dict | None:
     """Retrieve full property record by Property_ID"""
@@ -102,7 +103,6 @@ def get_market_trend_data(locality: str = None, city: str = None, db: Session = 
     if not locality and not city:
         return stats
 
-    # 1. Query DB Market Data or CSV
     if db:
         m_query = db.query(MarketData)
         if locality:
@@ -121,7 +121,6 @@ def get_market_trend_data(locality: str = None, city: str = None, db: Session = 
             stats["max_price"] = float(np.max(prices))
             stats["data_found"] = True
 
-    # 2. Query Historical Prices for Growth % and Demand Index
     if os.path.exists(HISTORICAL_CSV):
         try:
             df_h = pd.read_csv(HISTORICAL_CSV)
@@ -175,7 +174,6 @@ def get_google_amenities_for_property(prop_id: int, db: Session) -> list[dict]:
     if not prop:
         return []
 
-    # Resolve coordinates
     loc_res = resolve_property_location(prop["latitude"], prop["longitude"], prop["city"], prop["locality"], prop_id)
     lat = loc_res["resolvedLatitude"]
     lon = loc_res["resolvedLongitude"]

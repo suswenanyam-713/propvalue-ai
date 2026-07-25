@@ -5,8 +5,9 @@ import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-RAG_CSV_PATH = "Dataset/RAG_Knowledge_5000.csv"
-INDEX_CACHE_PATH = "backend/ml/saved_models/rag_tfidf_index.joblib"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+RAG_CSV_PATH = os.path.join(BASE_DIR, "Dataset", "RAG_Knowledge_5000.csv")
+INDEX_CACHE_PATH = os.path.join(BASE_DIR, "backend", "ml", "saved_models", "rag_tfidf_index.joblib")
 
 class VectorRAGRetriever:
     def __init__(self):
@@ -37,7 +38,6 @@ class VectorRAGRetriever:
         try:
             print("Building TF-IDF Vector Index over 5000 RAG Knowledge documents...")
             df = pd.read_csv(RAG_CSV_PATH)
-            # Remove duplicate Q&A pairs
             df_clean = df.drop_duplicates(subset=["Question", "Answer"])
             
             docs = []
@@ -62,7 +62,7 @@ class VectorRAGRetriever:
 
             # Save persistent index to disk if writable
             try:
-                os.makedirs("backend/ml/saved_models", exist_ok=True)
+                os.makedirs(os.path.dirname(INDEX_CACHE_PATH), exist_ok=True)
                 joblib.dump({
                     "vectorizer": self.vectorizer,
                     "tfidf_matrix": self.tfidf_matrix,
