@@ -37,7 +37,7 @@ app.include_router(routes_prop.router)
 app.include_router(routes_chat.router)
 app.include_router(routes_admin.router)
 
-@app.get("/")
+@app.get("/api")
 def read_root():
     return {
         "status": "online",
