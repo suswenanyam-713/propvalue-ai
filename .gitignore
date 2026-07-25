@@ -2,13 +2,12 @@
 .env
 .env.local
 .env.*.local
-frontend/.env
+# frontend/.env is committed intentionally so VITE_GOOGLE_MAPS_API_KEY is baked into Vercel build
 
 # Databases & Cache
-*.db
+# real_estate.db is intentionally committed for Vercel deployment
 *.sqlite
 *.sqlite3
-backend/real_estate.db
 
 # Python
 __pycache__/
