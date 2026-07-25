@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from datetime import datetime
 import numpy as np
 import math
 
@@ -142,9 +143,9 @@ def get_property_details(property_id: int, db: Session = Depends(get_db)):
         "location": loc_res,
         "nearby_google_places": places_res["places"],
         "places_metadata": {
-            "data_source": places_res["data_source"],
-            "last_updated": places_res["last_updated"],
-            "total_count": places_res["total_count"]
+            "data_source": places_res.get("data_source", "Google Places API (New)"),
+            "last_updated": places_res.get("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            "total_count": places_res.get("count", len(places_res.get("places", [])))
         },
         "location_score_breakdown": score_res["breakdown"],
         "historical_prices": [{
