@@ -60,14 +60,17 @@ class VectorRAGRetriever:
             self.documents = docs
             self.is_indexed = True
 
-            # Save persistent index to disk
-            os.makedirs("backend/ml/saved_models", exist_ok=True)
-            joblib.dump({
-                "vectorizer": self.vectorizer,
-                "tfidf_matrix": self.tfidf_matrix,
-                "documents": self.documents
-            }, INDEX_CACHE_PATH)
-            print(f"RAG Vector Index built and saved successfully! Indexed {len(self.documents)} documents.")
+            # Save persistent index to disk if writable
+            try:
+                os.makedirs("backend/ml/saved_models", exist_ok=True)
+                joblib.dump({
+                    "vectorizer": self.vectorizer,
+                    "tfidf_matrix": self.tfidf_matrix,
+                    "documents": self.documents
+                }, INDEX_CACHE_PATH)
+            except Exception as e:
+                print(f"Read-only filesystem, skipping index cache save: {e}")
+            print(f"RAG Vector Index built successfully! Indexed {len(self.documents)} documents.")
         except Exception as e:
             print(f"Error building RAG vector index: {e}")
 
