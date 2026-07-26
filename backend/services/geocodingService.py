@@ -123,3 +123,70 @@ def google_geocode_address(address_str: str) -> dict:
         "place_id": "google_api_error_stub",
         "status": "API Error - Fallback Loaded"
     }
+
+def google_reverse_geocode(lat: float, lon: float) -> dict:
+    """
+    Reverse geocodes latitude and longitude coordinates using Google Maps Geocoding API.
+    Returns formatted_address, locality, city, state, postal_code.
+    """
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+    if not api_key:
+        return {
+            "formatted_address": f"Location ({lat:.4f}, {lon:.4f})",
+            "locality": "Geocoded Area",
+            "city": "Hyderabad",
+            "state": "Telangana",
+            "status": "Key Missing"
+        }
+
+    referer_header = os.getenv("APP_REFERER", "https://propvalue-ai-i2hd.vercel.app/").strip()
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lon}&key={api_key}"
+    try:
+        response = requests.get(url, headers={"Referer": referer_header}, timeout=5)
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("status") == "OK" and len(result.get("results", [])) > 0:
+                best_match = result["results"][0]
+                formatted_address = best_match.get("formatted_address", "")
+                
+                components = best_match.get("address_components", [])
+                locality = ""
+                city = ""
+                state = ""
+                postal_code = ""
+                
+                for comp in components:
+                    types = comp.get("types", [])
+                    if "sublocality_level_1" in types or "sublocality" in types or "neighborhood" in types:
+                        if not locality:
+                            locality = comp["long_name"]
+                    elif "locality" in types:
+                        if not locality:
+                            locality = comp["long_name"]
+                        if not city:
+                            city = comp["long_name"]
+                    elif "administrative_area_level_2" in types:
+                        if not city:
+                            city = comp["long_name"]
+                    elif "administrative_area_level_1" in types:
+                        state = comp["long_name"]
+                    elif "postal_code" in types:
+                        postal_code = comp["long_name"]
+
+                return {
+                    "formatted_address": formatted_address,
+                    "locality": locality or "Unknown Locality",
+                    "city": city or "Unknown City",
+                    "state": state,
+                    "postal_code": postal_code,
+                    "status": "OK"
+                }
+    except Exception as e:
+        print(f"[Reverse Geocode Error]: {e}")
+
+    return {
+        "formatted_address": f"Coordinates ({lat:.4f}, {lon:.4f})",
+        "locality": "Area",
+        "city": "Hyderabad",
+        "status": "Error"
+    }

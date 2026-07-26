@@ -614,6 +614,11 @@ def geocode_address_endpoint(address: str, db: Session = Depends(get_db)):
     from backend.services.geocodingService import google_geocode_address
     return google_geocode_address(address)
 
+@router.get("/location/reverse")
+def reverse_geocode_endpoint(lat: float, lon: float, db: Session = Depends(get_db)):
+    from backend.services.geocodingService import google_reverse_geocode
+    return google_reverse_geocode(lat, lon)
+
 @router.get("/places/nearby")
 def get_nearby_google_places_endpoint(
     lat: float,

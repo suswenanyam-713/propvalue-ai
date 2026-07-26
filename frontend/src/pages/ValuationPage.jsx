@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
-import { Brain, TrendingUp, ShieldAlert, IndianRupee, AlertCircle, Loader2, MapPin, Sparkles, Building, Compass, Calendar, Search, X, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Brain, TrendingUp, ShieldAlert, IndianRupee, AlertCircle, Loader2, MapPin, Sparkles, Building, Compass, Calendar, CheckCircle2, ExternalLink, Navigation } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
 
@@ -15,10 +15,6 @@ const LOCALITIES = {
 };
 const TYPES = ['Apartment', 'Independent House', 'Plot', 'Villa'];
 const FURNISHING = ['Unfurnished', 'Semi', 'Fully'];
-const CITY_COORDS = {
-  Chennai: [12.9796, 80.2201], Hyderabad: [17.4965, 78.4014],
-  Pune: [18.5912, 73.7389], Mumbai: [19.0596, 72.8295], Bengaluru: [12.9784, 77.6408],
-};
 
 const AMENITY_COLORS = {
   Hospital: '#ef4444', Clinic: '#f43f5e', Pharmacy: '#fb7185',
@@ -58,28 +54,22 @@ function useDebounce(fn, delay) {
 export default function ValuationPage() {
   const clientApiKey = getGoogleMapsApiKey();
 
+  // Coordinate-driven state (Latitude & Longitude as single source of truth)
   const [form, setForm] = useState({
     city: 'Hyderabad', locality: 'Gachibowli', property_type: 'Apartment',
     area_sqft: 1500, bedrooms: 3, bathrooms: 2, floor: 5, age: 3,
     parking: 'Yes', furnishing: 'Semi', latitude: 17.4401, longitude: 78.3489,
   });
-  const [addressInput, setAddressInput] = useState('');
+
+  // Reverse Geocoded Address state
+  const [detectedAddress, setDetectedAddress] = useState('Detecting address...');
+  const [isGeocoding, setIsGeocoding] = useState(false);
+
   const [result, setResult] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [error, setError] = useState('');
-
-  // 100% Live Google Places Autocomplete state
-  const [suggestions, setSuggestions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [isSearchingAc, setIsSearchingAc] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [acError, setAcError] = useState('');
-  
-  const acRef = useRef(null);
-  const acServiceRef = useRef(null);
-  const sessionTokenRef = useRef(null);
 
   // Live Nearby Google Places state
   const [nearbyAmenities, setNearbyAmenities] = useState([]);
@@ -95,138 +85,6 @@ export default function ValuationPage() {
   const googleMapInstance = useRef(null);
   const previewMarkersRef = useRef([]);
   const resultMarkersRef = useRef([]);
-
-  // Close Autocomplete Dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (acRef.current && !acRef.current.contains(e.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Helper to initialize or retrieve client-side AutocompleteService
-  const getAutocompleteService = useCallback(() => {
-    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteService) {
-      if (!acServiceRef.current) {
-        acServiceRef.current = new window.google.maps.places.AutocompleteService();
-        console.log("[Google Places] AutocompleteService initialized successfully");
-      }
-      return acServiceRef.current;
-    }
-    return null;
-  }, []);
-
-  // Helper to manage Autocomplete Session Token
-  const getSessionToken = useCallback(() => {
-    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteSessionToken) {
-      if (!sessionTokenRef.current) {
-        sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
-      }
-      return sessionTokenRef.current;
-    }
-    return null;
-  }, []);
-
-  // Fetch Live Google Places Autocomplete Predictions strictly from Google Places API
-  const fetchAutocomplete = useCallback((query) => {
-    if (!query || query.trim().length < 2) {
-      setSuggestions([]);
-      setShowDropdown(false);
-      setSelectedIndex(-1);
-      return;
-    }
-    setIsSearchingAc(true);
-    setAcError('');
-
-    const service = getAutocompleteService();
-    if (service) {
-      try {
-        const req = {
-          input: query.trim(),
-          componentRestrictions: { country: 'in' },
-        };
-        const token = getSessionToken();
-        if (token) {
-          req.sessionToken = token;
-        }
-
-        service.getPlacePredictions(req, async (predictions, status) => {
-          if (status === window.google.maps.places.PlacesServiceStatus.OK && Array.isArray(predictions) && predictions.length > 0) {
-            setIsSearchingAc(false);
-            setSuggestions(predictions);
-            setShowDropdown(true);
-            setAcError('');
-            setSelectedIndex(-1);
-            console.log(`[Google Places] Returned ${predictions.length} live predictions for query: "${query}"`);
-            return;
-          }
-
-          console.error("[Google Places] Autocomplete status error:", status);
-
-          // Secondary live API lookup using backend proxy
-          try {
-            const res = await axios.get('/api/location/search', { params: { input: query } });
-            const proxyPreds = res.data?.predictions || [];
-            if (proxyPreds.length > 0) {
-              setIsSearchingAc(false);
-              setSuggestions(proxyPreds);
-              setShowDropdown(true);
-              setAcError('');
-              setSelectedIndex(-1);
-              return;
-            }
-          } catch (backendErr) {
-            console.error("[Google Places] Backend autocomplete proxy failed:", backendErr);
-          }
-
-          setIsSearchingAc(false);
-          setSuggestions([]);
-          setShowDropdown(false);
-          setSelectedIndex(-1);
-
-          if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            setAcError('No Google location suggestions found.');
-          } else {
-            setAcError('Unable to load Google location suggestions.');
-          }
-        });
-        return;
-      } catch (err) {
-        console.error("[Google Places] Autocomplete exception:", err);
-      }
-    }
-
-    // Fallback if client Places JS API is initializing
-    axios.get('/api/location/search', { params: { input: query } })
-      .then(res => {
-        const proxyPreds = res.data?.predictions || [];
-        if (proxyPreds.length > 0) {
-          setSuggestions(proxyPreds);
-          setShowDropdown(true);
-          setAcError('');
-        } else {
-          setAcError('Unable to load Google location suggestions.');
-        }
-      })
-      .catch(err => {
-        console.error("[Google Places] Backend proxy autocomplete exception:", err);
-        setAcError('Unable to load Google location suggestions.');
-      })
-      .finally(() => {
-        setIsSearchingAc(false);
-      });
-  }, [getAutocompleteService, getSessionToken]);
-
-  const debouncedFetchAc = useDebounce(fetchAutocomplete, 300);
-
-  const handleAddressInputChange = (e) => {
-    const val = e.target.value;
-    setAddressInput(val);
-    debouncedFetchAc(val);
-  };
 
   // Fetch Live Nearby Amenities using centralized endpoint
   const fetchLiveNearbyAmenities = useCallback(async (lat, lon, city, locality) => {
@@ -249,99 +107,133 @@ export default function ValuationPage() {
     }
   }, []);
 
-  const debouncedRefreshNearby = useDebounce((lat, lng, city, locality) => {
-    fetchLiveNearbyAmenities(lat, lng, city, locality);
-  }, 450);
+  // REAL Google Reverse Geocoding from Latitude + Longitude
+  const reverseGeocodeCoordinates = useCallback((lat, lng) => {
+    const numLat = Number(lat);
+    const numLng = Number(lng);
 
-  // Handle Autocomplete Item Selection
-  const handleSelectSuggestion = useCallback((prediction) => {
-    if (!prediction) return;
-    const placeId = prediction.place_id;
-    const description = prediction.description || prediction.structured_formatting?.main_text || '';
-
-    setShowDropdown(false);
-    setAcError('');
-    setSelectedIndex(-1);
-
-    // Reset Session Token after place selection
-    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteSessionToken) {
-      sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+    if (!Number.isFinite(numLat) || !Number.isFinite(numLng) || numLat < -90 || numLat > 90 || numLng < -180 || numLng > 180) {
+      setDetectedAddress('Invalid coordinates');
+      return;
     }
 
-    if (!placeId) return;
+    setIsGeocoding(true);
+    setDetectedAddress('Detecting address...');
 
-    // Use Geocoder in Browser JS to resolve coordinates & address components
+    const processComponents = (components, formattedAddress) => {
+      let locality = '', city = '';
+      for (const comp of (components || [])) {
+        const types = comp.types || [];
+        if (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood')) {
+          if (!locality) locality = comp.long_name;
+        } else if (types.includes('locality')) {
+          if (!locality) locality = comp.long_name;
+          if (!city) city = comp.long_name;
+        } else if (types.includes('administrative_area_level_2')) {
+          if (!city) city = comp.long_name;
+        } else if (types.includes('administrative_area_level_1')) {
+          if (!city) city = comp.long_name;
+        }
+      }
+
+      const CITY_MAP = {
+        Hyderabad: 'Hyderabad', Chennai: 'Chennai', Pune: 'Pune',
+        Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
+      };
+
+      const detectedCity = CITY_MAP[city] || city || form.city;
+      const detectedLocality = locality || formattedAddress.split(',')[0] || form.locality;
+
+      setDetectedAddress(formattedAddress);
+      setForm(prev => ({
+        ...prev,
+        city: detectedCity,
+        locality: detectedLocality,
+      }));
+
+      // Refresh live nearby amenities automatically
+      fetchLiveNearbyAmenities(numLat, numLng, detectedCity, detectedLocality);
+      setIsGeocoding(false);
+    };
+
+    // 1. Try Browser-Native Google Geocoder if loaded
     if (window.google && window.google.maps && window.google.maps.Geocoder) {
       try {
         const geocoder = new window.google.maps.Geocoder();
-        geocoder.geocode({ placeId: placeId }, (results, status) => {
+        geocoder.geocode({ location: { lat: numLat, lng: numLng } }, (results, status) => {
           if (status === 'OK' && results && results[0]) {
             const place = results[0];
-            const lat = place.geometry.location.lat();
-            const lng = place.geometry.location.lng();
-
-            let locality = '', city = '';
-            for (const comp of (place.address_components || [])) {
-              const types = comp.types || [];
-              if (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood')) {
-                if (!locality) locality = comp.long_name;
-              } else if (types.includes('locality')) {
-                if (!locality) locality = comp.long_name;
-                if (!city) city = comp.long_name;
-              } else if (types.includes('administrative_area_level_2')) {
-                if (!city) city = comp.long_name;
-              }
-            }
-
-            const CITY_MAP = {
-              Hyderabad: 'Hyderabad', Chennai: 'Chennai', Pune: 'Pune',
-              Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
-            };
-
-            const selectedCity = CITY_MAP[city] || city || form.city;
-            const selectedLocality = locality || description.split(',')[0] || form.locality;
-
-            const formattedAddress = place.formatted_address || description;
-            setAddressInput(formattedAddress);
-
-            setForm(prev => ({
-              ...prev,
-              latitude: lat,
-              longitude: lng,
-              locality: selectedLocality,
-              city: selectedCity,
-            }));
-
-            // Refresh live nearby amenities with exact Google Place coordinates!
-            fetchLiveNearbyAmenities(lat, lng, selectedCity, selectedLocality);
+            processComponents(place.address_components, place.formatted_address);
           } else {
-            console.warn('Geocoder failed to resolve placeId:', placeId, status);
-            setAcError('Could not resolve selected location coordinates.');
+            console.error('[Reverse Geocoding] Browser geocoder status error:', status);
+            // Fallback to backend reverse geocode endpoint
+            axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
+              .then(res => {
+                if (res.data?.formatted_address) {
+                  setDetectedAddress(res.data.formatted_address);
+                  setForm(prev => ({
+                    ...prev,
+                    city: res.data.city || prev.city,
+                    locality: res.data.locality || prev.locality,
+                  }));
+                  fetchLiveNearbyAmenities(numLat, numLng, res.data.city || form.city, res.data.locality || form.locality);
+                } else {
+                  setDetectedAddress('Address unavailable for these coordinates');
+                }
+              })
+              .catch(() => setDetectedAddress('Address unavailable for these coordinates'))
+              .finally(() => setIsGeocoding(false));
           }
         });
+        return;
       } catch (err) {
-        console.warn('Geocoder exception:', err);
+        console.error('[Reverse Geocoding] Exception:', err);
       }
     }
+
+    // 2. Fallback to backend reverse geocoding API route
+    axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
+      .then(res => {
+        if (res.data?.formatted_address) {
+          setDetectedAddress(res.data.formatted_address);
+          setForm(prev => ({
+            ...prev,
+            city: res.data.city || prev.city,
+            locality: res.data.locality || prev.locality,
+          }));
+          fetchLiveNearbyAmenities(numLat, numLng, res.data.city || form.city, res.data.locality || form.locality);
+        } else {
+          setDetectedAddress('Address unavailable for these coordinates');
+        }
+      })
+      .catch(err => {
+        console.error('[Reverse Geocoding] Backend API exception:', err);
+        setDetectedAddress('Address unavailable for these coordinates');
+      })
+      .finally(() => setIsGeocoding(false));
   }, [form.city, form.locality, fetchLiveNearbyAmenities]);
 
-  // Keyboard navigation for dropdown (ArrowUp, ArrowDown, Enter, Escape)
-  const handleKeyDown = (e) => {
-    if (!showDropdown || suggestions.length === 0) return;
+  const debouncedReverseGeocode = useDebounce((lat, lng) => {
+    reverseGeocodeCoordinates(lat, lng);
+  }, 650);
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSelectedIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : 0));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedIndex(prev => (prev > 0 ? prev - 1 : suggestions.length - 1));
-    } else if (e.key === 'Enter') {
-      if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
-        e.preventDefault();
-        handleSelectSuggestion(suggestions[selectedIndex]);
-      }
-    } else if (e.key === 'Escape') {
-      setShowDropdown(false);
+  // Handle Manual Latitude Change
+  const handleLatitudeChange = (e) => {
+    const rawVal = e.target.value;
+    const numVal = parseFloat(rawVal);
+    setForm(prev => ({ ...prev, latitude: rawVal }));
+    if (!isNaN(numVal) && numVal >= -90 && numVal <= 90) {
+      debouncedReverseGeocode(numVal, form.longitude);
+    }
+  };
+
+  // Handle Manual Longitude Change
+  const handleLongitudeChange = (e) => {
+    const rawVal = e.target.value;
+    const numVal = parseFloat(rawVal);
+    setForm(prev => ({ ...prev, longitude: rawVal }));
+    if (!isNaN(numVal) && numVal >= -180 && numVal <= 180) {
+      debouncedReverseGeocode(form.latitude, numVal);
     }
   };
 
@@ -418,9 +310,6 @@ export default function ValuationPage() {
         setIsGoogleLoaded(true);
         setMapsError('');
         console.log("[Google Maps] Maps loaded successfully");
-        if (window.google && window.google.maps && window.google.maps.places) {
-          console.log("[Google Places] Places library loaded successfully");
-        }
       })
       .catch(err => {
         setIsGoogleLoaded(false);
@@ -428,10 +317,10 @@ export default function ValuationPage() {
       });
   }, []);
 
-  // Initial live places fetch
+  // Initial reverse geocoding & live places fetch on mount
   useEffect(() => {
-    fetchLiveNearbyAmenities(form.latitude, form.longitude, form.city, form.locality);
-  }, [form.latitude, form.longitude, form.city, form.locality, fetchLiveNearbyAmenities]);
+    reverseGeocodeCoordinates(form.latitude, form.longitude);
+  }, []);
 
   // Update preview map when coords or amenities update
   useEffect(() => {
@@ -439,34 +328,6 @@ export default function ValuationPage() {
       renderPreviewMap(form.latitude, form.longitude, nearbyAmenities);
     }
   }, [isGoogleLoaded, form.latitude, form.longitude, nearbyAmenities, renderPreviewMap]);
-
-  // Handle City Selection Change
-  const handleCityChange = (e) => {
-    const newCity = e.target.value;
-    const newLocality = LOCALITIES[newCity]?.[0] || '';
-    const coords = CITY_COORDS[newCity] || [17.4485, 78.3908];
-    setForm(prev => ({
-      ...prev, city: newCity, locality: newLocality,
-      latitude: coords[0], longitude: coords[1],
-    }));
-    fetchLiveNearbyAmenities(coords[0], coords[1], newCity, newLocality);
-  };
-
-  // Handle Locality Selection Change
-  const handleLocalityChange = (e) => {
-    const newLocality = e.target.value;
-    setForm(prev => ({ ...prev, locality: newLocality }));
-    axios.get('/api/location/geocode', { params: { address: `${newLocality}, ${form.city}` } })
-      .then(res => {
-        if (res.data?.latitude && res.data?.longitude) {
-          setForm(prev => ({ ...prev, latitude: res.data.latitude, longitude: res.data.longitude }));
-          fetchLiveNearbyAmenities(res.data.latitude, res.data.longitude, form.city, newLocality);
-        }
-      })
-      .catch(() => {
-        fetchLiveNearbyAmenities(form.latitude, form.longitude, form.city, newLocality);
-      });
-  };
 
   // Submit Valuation Request
   const handleSubmit = async (e) => {
@@ -477,7 +338,13 @@ export default function ValuationPage() {
     setForecast(null);
 
     try {
-      const res = await axios.post('/api/predict', form);
+      const payload = {
+        ...form,
+        latitude: Number(form.latitude),
+        longitude: Number(form.longitude),
+        detected_address: detectedAddress
+      };
+      const res = await axios.post('/api/predict', payload);
       setResult(res.data);
 
       if (res.data?.nearbyAmenities) {
@@ -642,67 +509,29 @@ export default function ValuationPage() {
                 <Compass className="h-5 w-5 text-violet-400" /> Property Specifications
               </h2>
 
-              {/* Address Autocomplete Search Input */}
-              <div ref={acRef} className="relative">
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Search Address / Location (Google Autocomplete)</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={addressInput}
-                    onChange={handleAddressInputChange}
-                    onKeyDown={handleKeyDown}
-                    onFocus={() => { if (suggestions.length > 0) setShowDropdown(true); }}
-                    placeholder="e.g. Financial District Hyderabad, Connaught Place, Miyapur..."
-                    className="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition pl-9"
-                  />
-                  <Search className="h-4 w-4 text-slate-400 absolute left-3 top-3" />
-                  {isSearchingAc && <Loader2 className="h-4 w-4 animate-spin text-violet-400 absolute right-3 top-3" />}
-                </div>
-
-                {/* Live Google Autocomplete Suggestions Dropdown */}
-                {showDropdown && suggestions.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-violet-500/30 rounded-xl shadow-2xl z-[100000] max-h-60 overflow-y-auto">
-                    {suggestions.map((item, idx) => (
-                      <div
-                        key={item.place_id || idx}
-                        onClick={() => handleSelectSuggestion(item)}
-                        className={`px-4 py-2.5 cursor-pointer text-xs flex items-center gap-2.5 border-b border-white/5 last:border-none transition ${selectedIndex === idx ? 'bg-violet-600/40 text-white' : 'hover:bg-violet-600/20 text-slate-200'}`}
-                      >
-                        <MapPin className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-bold text-white text-xs truncate">
-                            {item.structured_formatting?.main_text || item.description?.split(',')[0] || item.description}
-                          </p>
-                          {item.structured_formatting?.secondary_text ? (
-                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.structured_formatting.secondary_text}</p>
-                          ) : (
-                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.description}</p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {acError && <p className="text-[11px] text-amber-400 mt-1">{acError}</p>}
-              </div>
-
-              {/* City & Locality Controls */}
+              {/* Auto-detected City & Locality Controls (Source of Truth: Coordinates) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">City</label>
-                  <select value={form.city} onChange={handleCityChange} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
-                    {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">City (Auto-Detected)</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={form.city}
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-violet-300 font-semibold focus:outline-none cursor-default"
+                  />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Locality</label>
-                  <select value={form.locality} onChange={handleLocalityChange} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
-                    {(LOCALITIES[form.city] || []).map(l => <option key={l} value={l}>{l}</option>)}
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Locality (Auto-Detected)</label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={form.locality}
+                    className="w-full bg-slate-900/80 border border-white/10 rounded-xl px-3 py-2 text-xs text-violet-300 font-semibold focus:outline-none cursor-default"
+                  />
                 </div>
               </div>
 
-              {/* Restored Editable Latitude & Longitude Inputs */}
+              {/* Editable Latitude & Longitude Inputs (Primary Controls) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Latitude (°N)</label>
@@ -712,16 +541,8 @@ export default function ValuationPage() {
                     min="-90"
                     max="90"
                     value={form.latitude}
-                    onChange={(e) => {
-                      const rawVal = e.target.value;
-                      const val = parseFloat(rawVal);
-                      if (!isNaN(val) && val >= -90 && val <= 90) {
-                        setForm(prev => ({ ...prev, latitude: val }));
-                        debouncedRefreshNearby(val, form.longitude, form.city, form.locality);
-                      } else {
-                        setForm(prev => ({ ...prev, latitude: rawVal }));
-                      }
-                    }}
+                    onChange={handleLatitudeChange}
+                    placeholder="e.g. 17.4967"
                     className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
                   />
                 </div>
@@ -733,18 +554,27 @@ export default function ValuationPage() {
                     min="-180"
                     max="180"
                     value={form.longitude}
-                    onChange={(e) => {
-                      const rawVal = e.target.value;
-                      const val = parseFloat(rawVal);
-                      if (!isNaN(val) && val >= -180 && val <= 180) {
-                        setForm(prev => ({ ...prev, longitude: val }));
-                        debouncedRefreshNearby(form.latitude, val, form.city, form.locality);
-                      } else {
-                        setForm(prev => ({ ...prev, longitude: rawVal }));
-                      }
-                    }}
+                    onChange={handleLongitudeChange}
+                    placeholder="e.g. 78.3614"
                     className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
                   />
+                </div>
+              </div>
+
+              {/* Auto-Detected Address Display */}
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">Detected Address (Auto-Geocoded)</label>
+                <div className="bg-slate-900/90 border border-violet-500/20 rounded-xl p-3 text-xs flex items-start gap-2.5 min-h-[52px]">
+                  <Navigation className="h-4 w-4 text-violet-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    {isGeocoding ? (
+                      <p className="text-slate-400 italic flex items-center gap-1.5">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" /> Reverse geocoding address...
+                      </p>
+                    ) : (
+                      <p className="text-slate-200 font-medium leading-relaxed">{detectedAddress}</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
