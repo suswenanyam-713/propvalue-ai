@@ -152,35 +152,70 @@ export default function ValuationPage() {
           req.sessionToken = token;
         }
 
-        service.getPlacePredictions(req, (predictions, status) => {
-          setIsSearchingAc(false);
-          setSelectedIndex(-1);
+        service.getPlacePredictions(req, async (predictions, status) => {
           if (status === window.google.maps.places.PlacesServiceStatus.OK && Array.isArray(predictions) && predictions.length > 0) {
+            setIsSearchingAc(false);
             setSuggestions(predictions);
             setShowDropdown(true);
             setAcError('');
-          } else if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            setSuggestions([]);
-            setShowDropdown(false);
+            setSelectedIndex(-1);
+            return;
+          }
+
+          console.error("Google Places autocomplete failed:", status);
+
+          // Attempt backend proxy as a secondary live API lookup
+          try {
+            const res = await axios.get('/api/location/search', { params: { input: query } });
+            const proxyPreds = res.data?.predictions || [];
+            if (proxyPreds.length > 0) {
+              setIsSearchingAc(false);
+              setSuggestions(proxyPreds);
+              setShowDropdown(true);
+              setAcError('');
+              setSelectedIndex(-1);
+              return;
+            }
+          } catch (backendErr) {
+            console.error("Backend autocomplete proxy failed:", backendErr);
+          }
+
+          setIsSearchingAc(false);
+          setSuggestions([]);
+          setShowDropdown(false);
+          setSelectedIndex(-1);
+
+          if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
             setAcError('No Google location suggestions found.');
           } else {
-            console.warn('Google Places Autocomplete status:', status);
-            setSuggestions([]);
-            setShowDropdown(false);
             setAcError('Unable to load Google location suggestions.');
           }
         });
         return;
       } catch (err) {
-        console.warn('AutocompleteService prediction exception:', err);
+        console.error("Google Places autocomplete failed:", err);
       }
     }
 
-    // If Google Places JS API is not loaded yet
-    setIsSearchingAc(false);
-    setSuggestions([]);
-    setShowDropdown(false);
-    setAcError('Google Places JS API is loading...');
+    // Fallback if client Places JS API is initializing
+    axios.get('/api/location/search', { params: { input: query } })
+      .then(res => {
+        const proxyPreds = res.data?.predictions || [];
+        if (proxyPreds.length > 0) {
+          setSuggestions(proxyPreds);
+          setShowDropdown(true);
+          setAcError('');
+        } else {
+          setAcError('Unable to load Google location suggestions.');
+        }
+      })
+      .catch(err => {
+        console.error("Google Places autocomplete failed:", err);
+        setAcError('Unable to load Google location suggestions.');
+      })
+      .finally(() => {
+        setIsSearchingAc(false);
+      });
   }, [getAutocompleteService, getSessionToken]);
 
   const debouncedFetchAc = useDebounce(fetchAutocomplete, 300);
@@ -550,7 +585,7 @@ export default function ValuationPage() {
               <div style="color:#0f172a;font-family:sans-serif;font-size:12px;padding:6px;max-width:220px;">
                 <strong style="font-size:13px;color:#1e293b;">${pl.name || 'Place'}</strong><br/>
                 <span style="font-size:11px;color:#64748b;">${pl.category || ''} · <strong>${pl.distance_km || 0} km</strong></span><br/>
-                ${pl.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span><br/>` : ''}
+                ${pl.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span>` : ''}
                 ${pl.address ? `<span style="font-size:11px;color:#475569;">${pl.address}</span>` : ''}
               </div>
             `

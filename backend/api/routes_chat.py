@@ -26,15 +26,19 @@ def chat_with_assistant(data: ChatInputSchema, db: Session = Depends(get_db), cu
         # Process through Hybrid Real Estate RAG Engine
         res = process_hybrid_rag_query(user_query, conversation_id=data.conversationId, db=db)
 
-        # Log conversation in Database if user is logged in
+        # Log conversation in Database if user is logged in (safe for read-only serverless DB)
         if current_user:
-            chat_log = ChatHistory(
-                user_id=current_user.id,
-                question=user_query,
-                answer=res["answer"]
-            )
-            db.add(chat_log)
-            db.commit()
+            try:
+                chat_log = ChatHistory(
+                    user_id=current_user.id,
+                    question=user_query,
+                    answer=res["answer"]
+                )
+                db.add(chat_log)
+                db.commit()
+            except Exception as db_err:
+                db.rollback()
+                print(f"[Chat History Log Warning]: Skipping DB write on read-only filesystem: {db_err}")
 
         return {
             "answer": res["answer"],
