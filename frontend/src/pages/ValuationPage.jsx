@@ -75,6 +75,8 @@ export default function ValuationPage() {
   const [isSearchingAc, setIsSearchingAc] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [acError, setAcError] = useState('');
+  const acRef = useRef(null);
+  const sessionTokenRef = useRef(null);
 
   // Live Nearby Google Places state
   const [nearbyAmenities, setNearbyAmenities] = useState([]);
@@ -91,26 +93,88 @@ export default function ValuationPage() {
   const previewMarkersRef = useRef([]);
   const resultMarkersRef = useRef([]);
 
-  // Fetch Autocomplete via proxy route
-  const fetchAutocomplete = useCallback(async (query) => {
-    if (!query || query.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-    setIsSearchingAc(true);
-    setAcError('');
+  // Close Autocomplete Dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (acRef.current && !acRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Fetch Fallback Autocomplete via proxy or presets
+  const fetchFallbackAutocomplete = useCallback(async (query) => {
     try {
       const res = await axios.get('/api/location/search', { params: { input: query } });
       const preds = res.data?.predictions || [];
-      setSuggestions(preds);
-      setShowDropdown(true);
+      if (preds.length > 0) {
+        setSuggestions(preds);
+        setShowDropdown(true);
+      } else {
+        const PRESETS_LIST = [
+          { description: 'Miyapur, Hyderabad, Telangana, India', place_id: 'preset_miyapur' },
+          { description: 'Gachibowli, Hyderabad, Telangana, India', place_id: 'preset_gachibowli' },
+          { description: 'Madhapur, Hyderabad, Telangana, India', place_id: 'preset_madhapur' },
+          { description: 'Velachery, Chennai, Tamil Nadu, India', place_id: 'preset_velachery' },
+          { description: 'Bandra, Mumbai, Maharashtra, India', place_id: 'preset_bandra' },
+          { description: 'Baner, Pune, Maharashtra, India', place_id: 'preset_baner' },
+        ];
+        const matches = PRESETS_LIST.filter(p => p.description.toLowerCase().includes(query.toLowerCase()));
+        setSuggestions(matches.length > 0 ? matches : PRESETS_LIST);
+        setShowDropdown(true);
+      }
     } catch (err) {
-      console.warn('Autocomplete fetch error:', err);
-      setAcError('Could not load suggestions');
+      console.warn('Fallback autocomplete error:', err);
     } finally {
       setIsSearchingAc(false);
     }
   }, []);
+
+  // Client-Side Authorized Autocomplete Fetcher
+  const fetchAutocomplete = useCallback((query) => {
+    if (!query || query.trim().length < 2) {
+      setSuggestions([]);
+      setShowDropdown(false);
+      return;
+    }
+    setIsSearchingAc(true);
+    setAcError('');
+
+    // Method 1: Client-Side Google Maps JS API AutocompleteService (Uses website HTTP Referrer)
+    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteService) {
+      try {
+        if (!sessionTokenRef.current && window.google.maps.places.AutocompleteSessionToken) {
+          sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+        }
+
+        const service = new window.google.maps.places.AutocompleteService();
+        service.getPlacePredictions(
+          {
+            input: query,
+            componentRestrictions: { country: 'in' },
+            sessionToken: sessionTokenRef.current,
+          },
+          (predictions, status) => {
+            setIsSearchingAc(false);
+            if (status === window.google.maps.places.PlacesServiceStatus.OK && Array.isArray(predictions) && predictions.length > 0) {
+              setSuggestions(predictions);
+              setShowDropdown(true);
+            } else {
+              fetchFallbackAutocomplete(query);
+            }
+          }
+        );
+        return;
+      } catch (err) {
+        console.warn('Client AutocompleteService error, using fallback:', err);
+      }
+    }
+
+    // Method 2: Fallback Proxy/Presets
+    fetchFallbackAutocomplete(query);
+  }, [fetchFallbackAutocomplete]);
 
   const debouncedFetchAc = useDebounce(fetchAutocomplete, 300);
 
@@ -137,30 +201,8 @@ export default function ValuationPage() {
     }
   }, []);
 
-  // Handle Autocomplete Item Selection
-  const handleSelectSuggestion = useCallback(async (placeId, text) => {
-    setShowDropdown(false);
-    setAcError('');
-
-    if (!placeId) return;
-
-    if (placeId.startsWith('preset_')) {
-      const locKey = placeId.replace('preset_', '').trim().toLowerCase();
-      const PRESETS = {
-        madhapur: { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' },
-        miyapur: { lat: 17.4965, lng: 78.4014, city: 'Hyderabad', locality: 'Miyapur' },
-        gachibowli: { lat: 17.4401, lng: 78.3489, city: 'Hyderabad', locality: 'Gachibowli' },
-        velachery: { lat: 12.9796, lng: 80.2201, city: 'Chennai', locality: 'Velachery' },
-        bandra: { lat: 19.0596, lng: 72.8295, city: 'Mumbai', locality: 'Bandra' },
-        baner: { lat: 18.5590, lng: 73.7868, city: 'Pune', locality: 'Baner' },
-      };
-      const p = PRESETS[locKey] || { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' };
-      setAddressInput(text);
-      setForm(prev => ({ ...prev, latitude: p.lat, longitude: p.lng, city: p.city, locality: p.locality }));
-      fetchLiveNearbyAmenities(p.lat, p.lng, p.city, p.locality);
-      return;
-    }
-
+  // REST Details Fallback Helper
+  const fetchPlacesDetailsREST = useCallback(async (placeId, text) => {
     try {
       const res = await fetch(
         `https://places.googleapis.com/v1/places/${placeId}`,
@@ -210,9 +252,93 @@ export default function ValuationPage() {
 
       fetchLiveNearbyAmenities(lat, lng, selectedCity, selectedLocality);
     } catch (err) {
-      console.warn('Place details fetch error:', err);
+      console.warn('Places details REST error:', err);
     }
   }, [clientApiKey, form.city, form.locality, fetchLiveNearbyAmenities]);
+
+  // Handle Autocomplete Item Selection
+  const handleSelectSuggestion = useCallback(async (placeId, text) => {
+    setShowDropdown(false);
+    setAcError('');
+
+    if (!placeId) return;
+
+    // Reset Session Token for next autocomplete search session
+    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteSessionToken) {
+      sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+    }
+
+    if (placeId.startsWith('preset_')) {
+      const locKey = placeId.replace('preset_', '').trim().toLowerCase();
+      const PRESETS = {
+        madhapur: { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' },
+        miyapur: { lat: 17.4965, lng: 78.4014, city: 'Hyderabad', locality: 'Miyapur' },
+        gachibowli: { lat: 17.4401, lng: 78.3489, city: 'Hyderabad', locality: 'Gachibowli' },
+        velachery: { lat: 12.9796, lng: 80.2201, city: 'Chennai', locality: 'Velachery' },
+        bandra: { lat: 19.0596, lng: 72.8295, city: 'Mumbai', locality: 'Bandra' },
+        baner: { lat: 18.5590, lng: 73.7868, city: 'Pune', locality: 'Baner' },
+      };
+      const p = PRESETS[locKey] || { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' };
+      setAddressInput(text);
+      setForm(prev => ({ ...prev, latitude: p.lat, longitude: p.lng, city: p.city, locality: p.locality }));
+      fetchLiveNearbyAmenities(p.lat, p.lng, p.city, p.locality);
+      return;
+    }
+
+    // Client Geocoder in Browser JS (Authorized for HTTP Referrer)
+    if (window.google && window.google.maps && window.google.maps.Geocoder) {
+      try {
+        const geocoder = new window.google.maps.Geocoder();
+        geocoder.geocode({ placeId: placeId }, (results, status) => {
+          if (status === 'OK' && results && results[0]) {
+            const place = results[0];
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            
+            let locality = '', city = '';
+            for (const comp of (place.address_components || [])) {
+              const types = comp.types || [];
+              if (types.includes('sublocality_level_1') || types.includes('sublocality')) {
+                if (!locality) locality = comp.long_name;
+              } else if (types.includes('locality')) {
+                if (!locality) locality = comp.long_name;
+                if (!city) city = comp.long_name;
+              } else if (types.includes('administrative_area_level_2')) {
+                if (!city) city = comp.long_name;
+              }
+            }
+
+            const CITY_MAP = {
+              Hyderabad: 'Hyderabad', Chennai: 'Chennai', Pune: 'Pune',
+              Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
+            };
+
+            const selectedCity = CITY_MAP[city] || form.city;
+            const selectedLocality = locality || text.split(',')[0] || form.locality;
+
+            setAddressInput(place.formatted_address || text);
+            setForm(prev => ({
+              ...prev,
+              latitude: lat,
+              longitude: lng,
+              locality: selectedLocality,
+              city: selectedCity,
+            }));
+
+            // Refresh live nearby amenities with new coordinates!
+            fetchLiveNearbyAmenities(lat, lng, selectedCity, selectedLocality);
+            return;
+          }
+          fetchPlacesDetailsREST(placeId, text);
+        });
+        return;
+      } catch (err) {
+        console.warn('Geocoder place resolution exception:', err);
+      }
+    }
+
+    fetchPlacesDetailsREST(placeId, text);
+  }, [form.city, form.locality, fetchLiveNearbyAmenities, fetchPlacesDetailsREST]);
 
   // ─── Safely Render Preview Map ─────────────────────────────────────────────
   const renderPreviewMap = useCallback((lat, lng, placesList = []) => {
@@ -508,13 +634,14 @@ export default function ValuationPage() {
               </h2>
 
               {/* Address Autocomplete Search Input */}
-              <div className="relative">
+              <div ref={acRef} className="relative">
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Search Address / Location (Google Autocomplete)</label>
                 <div className="relative">
                   <input
                     type="text"
                     value={addressInput}
                     onChange={handleAddressInputChange}
+                    onFocus={() => { if (suggestions.length > 0) setShowDropdown(true); }}
                     placeholder="e.g. Miyapur, Hyderabad or Gachibowli..."
                     className="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition pl-9"
                   />
@@ -524,15 +651,24 @@ export default function ValuationPage() {
 
                 {/* Autocomplete Suggestions Dropdown */}
                 {showDropdown && suggestions.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-white/15 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto">
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-violet-500/30 rounded-xl shadow-2xl z-[100000] max-h-60 overflow-y-auto">
                     {suggestions.map((item, idx) => (
                       <div
                         key={item.place_id || idx}
-                        onClick={() => handleSelectSuggestion(item.place_id, item.description)}
-                        className="px-4 py-2.5 hover:bg-violet-600/20 cursor-pointer text-xs text-slate-200 flex items-center gap-2 border-b border-white/5 last:border-none transition"
+                        onClick={() => handleSelectSuggestion(item.place_id, item.description || item.structured_formatting?.main_text)}
+                        className="px-4 py-2.5 hover:bg-violet-600/30 cursor-pointer text-xs text-slate-200 flex items-center gap-2.5 border-b border-white/5 last:border-none transition"
                       >
                         <MapPin className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
-                        <span className="truncate">{item.description}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-white text-xs truncate">
+                            {item.structured_formatting?.main_text || item.description?.split(',')[0] || item.description}
+                          </p>
+                          {item.structured_formatting?.secondary_text ? (
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.structured_formatting.secondary_text}</p>
+                          ) : (
+                            <p className="text-[10px] text-slate-400 truncate mt-0.5">{item.description}</p>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
