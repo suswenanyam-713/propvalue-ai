@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, MapPin } from 'lucide-react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { loadGoogleMapsScript } from '../utils/googleMapsLoader';
 
 const AMENITY_COLORS = {
@@ -28,148 +30,200 @@ export default function GooglePropertyMap({
   subTitle = '',
 }) {
   const containerRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef = useRef([]);
+  const gmapInstanceRef = useRef(null);
+  const leafletInstanceRef = useRef(null);
+  const gmarkersRef = useRef([]);
+  const lmarkersRef = useRef([]);
 
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [useGoogle, setUseGoogle] = useState(false);
+  const [isReady, setIsReady] = useState(false);
 
-  // 1. Load Maps JS API single instance
   useEffect(() => {
+    let mounted = true;
     loadGoogleMapsScript()
       .then(() => {
-        setIsLoaded(true);
-        setErrorMsg('');
+        if (mounted) {
+          if (window.google && window.google.maps && !window.__googleMapsAuthFailed) {
+            setUseGoogle(true);
+          } else {
+            setUseGoogle(false);
+          }
+          setIsReady(true);
+        }
       })
-      .catch((err) => {
-        setIsLoaded(false);
-        setErrorMsg(err.message || 'Google Maps API failed to load.');
+      .catch(() => {
+        if (mounted) {
+          setUseGoogle(false);
+          setIsReady(true);
+        }
       });
-  }, []);
 
-  // 2. Render / update map and markers cleanly when coordinates or places change
+    const authCheckInterval = setInterval(() => {
+      if (window.__googleMapsAuthFailed && useGoogle) {
+        setUseGoogle(false);
+      }
+    }, 500);
+
+    return () => {
+      mounted = false;
+      clearInterval(authCheckInterval);
+    };
+  }, [useGoogle]);
+
   useEffect(() => {
-    if (!isLoaded || !containerRef.current || !window.google || !window.google.maps) return;
+    if (!containerRef.current) return;
 
     const numLat = Number(latitude);
     const numLng = Number(longitude);
     const safeLat = Number.isFinite(numLat) ? numLat : 17.4485;
-    const safeLng = Number.isFinite(numLng) ? numLng : 78.3908;
-    const center = { lat: safeLat, lng: safeLng };
+    const safeLng = Number.isFinite(numLng) ? numLng : 78.3489;
+    const centerCoords = [safeLat, safeLng];
 
-    // Reset instance if detached from current DOM element
-    if (mapInstanceRef.current && mapInstanceRef.current.getDiv) {
+    if (useGoogle && window.google && window.google.maps) {
+      // ─── Native Google Maps Rendering ───
       try {
-        if (mapInstanceRef.current.getDiv() !== containerRef.current) {
-          mapInstanceRef.current = null;
+        if (leafletInstanceRef.current) {
+          leafletInstanceRef.current.remove();
+          leafletInstanceRef.current = null;
         }
-      } catch (e) {
-        mapInstanceRef.current = null;
+
+        if (!gmapInstanceRef.current) {
+          gmapInstanceRef.current = new window.google.maps.Map(containerRef.current, {
+            center: { lat: safeLat, lng: safeLng },
+            zoom: 14,
+            styles: MAP_DARK_STYLE,
+            zoomControl: true,
+          });
+        }
+
+        const map = gmapInstanceRef.current;
+        map.setCenter({ lat: safeLat, lng: safeLng });
+
+        gmarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
+        gmarkersRef.current = [];
+
+        const bounds = new window.google.maps.LatLngBounds();
+        bounds.extend({ lat: safeLat, lng: safeLng });
+
+        const targetMarker = new window.google.maps.Marker({
+          position: { lat: safeLat, lng: safeLng },
+          map,
+          title: title || 'Target Location',
+          icon: {
+            path: window.google.maps.SymbolPath.CIRCLE,
+            scale: 9,
+            fillColor: '#8b5cf6',
+            fillOpacity: 1,
+            strokeColor: '#ffffff',
+            strokeWeight: 2.5,
+          },
+          zIndex: 999,
+        });
+        gmarkersRef.current.push(targetMarker);
+
+        if (Array.isArray(places) && places.length > 0) {
+          places.forEach(pl => {
+            if (!pl) return;
+            const pLat = Number(pl.latitude);
+            const pLng = Number(pl.longitude);
+            if (!Number.isFinite(pLat) || !Number.isFinite(pLng)) return;
+
+            bounds.extend({ lat: pLat, lng: pLng });
+            const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
+            const marker = new window.google.maps.Marker({
+              position: { lat: pLat, lng: pLng },
+              map,
+              title: pl.name || 'Place',
+              icon: {
+                path: window.google.maps.SymbolPath.CIRCLE,
+                scale: 5.5,
+                fillColor: markerColor,
+                fillOpacity: 0.85,
+                strokeColor: '#ffffff',
+                strokeWeight: 1.2,
+              },
+            });
+            gmarkersRef.current.push(marker);
+          });
+          map.fitBounds(bounds);
+        } else {
+          map.setZoom(14);
+        }
+        return;
+      } catch (err) {
+        console.warn('Google Maps error, falling back to Leaflet:', err);
+        setUseGoogle(false);
       }
     }
 
-    if (!mapInstanceRef.current) {
-      mapInstanceRef.current = new window.google.maps.Map(containerRef.current, {
-        center,
-        zoom: 14,
-        styles: MAP_DARK_STYLE,
-        zoomControl: true,
-        fullscreenControl: true,
-      });
-    }
+    // ─── Leaflet OpenStreetMap Fallback Rendering ───
+    try {
+      if (gmapInstanceRef.current) {
+        gmapInstanceRef.current = null;
+        if (containerRef.current) containerRef.current.innerHTML = '';
+      }
 
-    const map = mapInstanceRef.current;
-    map.setCenter(center);
+      if (!leafletInstanceRef.current) {
+        const lmap = L.map(containerRef.current, { zoomControl: true }).setView(centerCoords, 14);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+          subdomains: 'abcd',
+          maxZoom: 19,
+        }).addTo(lmap);
+        leafletInstanceRef.current = lmap;
+      } else {
+        leafletInstanceRef.current.setView(centerCoords, 14);
+      }
 
-    // Clear old markers
-    if (Array.isArray(markersRef.current)) {
-      markersRef.current.forEach((m) => m && m.setMap && m.setMap(null));
-    }
-    markersRef.current = [];
+      const lmap = leafletInstanceRef.current;
+      lmarkersRef.current.forEach(m => m && m.remove());
+      lmarkersRef.current = [];
 
-    const bounds = new window.google.maps.LatLngBounds();
-    bounds.extend(center);
-
-    // Target Property Marker (Purple)
-    const targetMarker = new window.google.maps.Marker({
-      position: center,
-      map,
-      title: title || 'Target Location',
-      icon: {
-        path: window.google.maps.SymbolPath.CIRCLE,
-        scale: 9,
-        fillColor: '#8b5cf6',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2.5,
-      },
-      zIndex: 999,
-    });
-
-    const targetIw = new window.google.maps.InfoWindow({
-      content: `<div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:200px;"><strong style="color:#6d28d9;">${title}</strong><br/><span style="font-size:11px;color:#475569;">${subTitle || `${safeLat.toFixed(4)}, ${safeLng.toFixed(4)}`}</span></div>`,
-    });
-    targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
-    markersRef.current.push(targetMarker);
-
-    // Render Nearby Places Markers
-    if (Array.isArray(places) && places.length > 0) {
-      places.forEach((pl) => {
-        if (!pl) return;
-        const pLat = Number(pl.latitude);
-        const pLng = Number(pl.longitude);
-        if (!Number.isFinite(pLat) || !Number.isFinite(pLng)) return;
-
-        const pos = { lat: pLat, lng: pLng };
-        bounds.extend(pos);
-
-        const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
-        const marker = new window.google.maps.Marker({
-          position: pos,
-          map,
-          title: pl.name || 'Place',
-          icon: {
-            path: window.google.maps.SymbolPath.CIRCLE,
-            scale: 5.5,
-            fillColor: markerColor,
-            fillOpacity: 0.85,
-            strokeColor: '#ffffff',
-            strokeWeight: 1.2,
-          },
-        });
-
-        const iw = new window.google.maps.InfoWindow({
-          content: `<div style="color:#0f172a;font-family:sans-serif;font-size:12px;padding:6px;max-width:220px;"><strong style="font-size:13px;color:#1e293b;">${pl.name || 'Place'}</strong><br/><span style="font-size:11px;color:#64748b;">${pl.category || ''} · <strong>${pl.distance_km || 0} km</strong></span>${pl.rating ? `<br/><span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span>` : ''}</div>`,
-        });
-        marker.addListener('click', () => iw.open(map, marker));
-        markersRef.current.push(marker);
+      const targetIcon = L.divIcon({
+        className: 'custom-target-marker',
+        html: `<div style="background-color:#8b5cf6;width:18px;height:18px;border-radius:50%;border:3px solid #ffffff;box-shadow:0 0 10px rgba(139,92,246,0.8);"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
       });
 
-      map.fitBounds(bounds);
-    } else {
-      map.setCenter(center);
-      map.setZoom(14);
-    }
-  }, [isLoaded, latitude, longitude, places, title, subTitle]);
+      const targetM = L.marker(centerCoords, { icon: targetIcon, zIndexOffset: 1000 }).addTo(lmap);
+      targetM.bindPopup(`<div style="font-family:sans-serif;color:#0f172a;font-size:12px;padding:2px;"><strong>${title}</strong><br/><span style="color:#64748b;">${subTitle || `${safeLat.toFixed(4)}, ${safeLng.toFixed(4)}`}</span></div>`);
+      lmarkersRef.current.push(targetM);
 
-  if (errorMsg) {
-    return (
-      <div className={`${height} rounded-xl border border-amber-500/20 bg-slate-900/90 p-4 text-center flex flex-col items-center justify-center`}>
-        <MapPin className="h-6 w-6 text-amber-400 mb-2" />
-        <p className="text-xs text-amber-300 font-semibold mb-1">Google Maps Initialization Notice</p>
-        <p className="text-[11px] text-slate-400 max-w-md">{errorMsg}</p>
-      </div>
-    );
-  }
+      if (Array.isArray(places) && places.length > 0) {
+        const boundsGroup = [centerCoords];
+        places.forEach(pl => {
+          if (!pl) return;
+          const pLat = Number(pl.latitude);
+          const pLng = Number(pl.longitude);
+          if (!Number.isFinite(pLat) || !Number.isFinite(pLng)) return;
+
+          boundsGroup.push([pLat, pLng]);
+          const color = AMENITY_COLORS[pl.category] || '#3b82f6';
+          const icon = L.divIcon({
+            className: 'custom-place-marker',
+            html: `<div style="background-color:${color};width:12px;height:12px;border-radius:50%;border:2px solid #ffffff;box-shadow:0 0 6px ${color};"></div>`,
+            iconSize: [12, 12],
+            iconAnchor: [6, 6],
+          });
+
+          const m = L.marker([pLat, pLng], { icon }).addTo(lmap);
+          m.bindPopup(`<div style="font-family:sans-serif;color:#0f172a;font-size:12px;padding:4px;"><strong style="color:#1e293b;">${pl.name || 'Place'}</strong><br/><span style="color:#64748b;">${pl.category || ''} · <strong>${pl.distance_km || 0} km</strong></span>${pl.rating ? `<br/><span style="color:#d97706;">⭐ ${pl.rating}</span>` : ''}</div>`);
+          lmarkersRef.current.push(m);
+        });
+
+        if (boundsGroup.length > 1) {
+          lmap.fitBounds(boundsGroup, { padding: [30, 30] });
+        }
+      }
+    } catch (err) {
+      console.warn('Leaflet render exception:', err);
+    }
+  }, [useGoogle, latitude, longitude, places, title, subTitle]);
 
   return (
     <div className={`${height} rounded-xl overflow-hidden border border-white/10 bg-slate-900 relative z-0 flex items-center justify-center`}>
       <div ref={containerRef} className="w-full h-full" />
-      {!isLoaded && (
-        <div className="absolute inset-0 bg-slate-900/90 flex items-center justify-center text-slate-400 text-xs gap-2">
-          <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Google Map...
-        </div>
-      )}
     </div>
   );
 }

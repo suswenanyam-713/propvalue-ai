@@ -177,7 +177,7 @@ export default function ValuationPage() {
       .finally(() => {
         setIsGeocoding(false);
       });
-  }, [form.city, form.locality, fetchLiveNearbyAmenities]);
+  }, [fetchLiveNearbyAmenities]);
 
   const debouncedReverseGeocode = useDebounce((lat, lng) => {
     reverseGeocodeCoordinates(lat, lng);

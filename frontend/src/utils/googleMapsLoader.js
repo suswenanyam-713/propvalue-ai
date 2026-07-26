@@ -36,8 +36,9 @@ export function loadGoogleMapsScript() {
     };
 
     window.gm_authFailure = () => {
-      mapsErrorState = 'Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.';
-      reject(new Error(mapsErrorState));
+      window.__googleMapsAuthFailed = true;
+      mapsErrorState = 'Google Maps API Key authorization failed. Using interactive map fallback.';
+      console.warn('[Google Maps Loader] Auth failure detected. Activating Leaflet map fallback.');
     };
 
     const existingScript = document.querySelector('script[data-gmaps-loader="true"]');
@@ -53,10 +54,11 @@ export function loadGoogleMapsScript() {
 
     const script = document.createElement('script');
     script.setAttribute('data-gmaps-loader', 'true');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&callback=${GMAPS_CALLBACK}`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&v=weekly&callback=${GMAPS_CALLBACK}`;
     script.async = true;
     script.defer = true;
     script.onerror = () => {
+      window.__googleMapsAuthFailed = true;
       mapsErrorState = 'Google Maps JavaScript API failed to load.';
       reject(new Error(mapsErrorState));
     };
