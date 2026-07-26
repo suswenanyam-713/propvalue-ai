@@ -124,10 +124,13 @@ export default function ComparePage() {
 
     if (clientApiKey) {
       window[GMAPS_CALLBACK] = onReady;
+      window.gm_authFailure = () => {
+        setMapsError('Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.');
+      };
       if (!document.querySelector('script[data-gmaps]')) {
         const script = document.createElement('script');
         script.setAttribute('data-gmaps', 'true');
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&callback=${GMAPS_CALLBACK}`;
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&libraries=places&callback=${GMAPS_CALLBACK}`;
         script.async = true;
         document.head.appendChild(script);
       }

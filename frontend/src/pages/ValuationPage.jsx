@@ -177,7 +177,24 @@ export default function ValuationPage() {
     setShowDropdown(false);
     setAcError('');
 
-    if (!placeId || !clientApiKey) return;
+    if (!placeId) return;
+
+    if (placeId.startsWith('preset_')) {
+      const locKey = placeId.replace('preset_', '').trim().toLowerCase();
+      const PRESETS = {
+        madhapur: { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' },
+        miyapur: { lat: 17.4965, lng: 78.4014, city: 'Hyderabad', locality: 'Miyapur' },
+        gachibowli: { lat: 17.4401, lng: 78.3489, city: 'Hyderabad', locality: 'Gachibowli' },
+        velachery: { lat: 12.9796, lng: 80.2201, city: 'Chennai', locality: 'Velachery' },
+        bandra: { lat: 19.0596, lng: 72.8295, city: 'Mumbai', locality: 'Bandra' },
+        baner: { lat: 18.5590, lng: 73.7868, city: 'Pune', locality: 'Baner' },
+      };
+      const p = PRESETS[locKey] || { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' };
+      setAddressInput(text);
+      setForm(prev => ({ ...prev, latitude: p.lat, longitude: p.lng, city: p.city, locality: p.locality }));
+      fetchLiveNearbyAmenities(p.lat, p.lng, p.city, p.locality);
+      return;
+    }
 
     try {
       const res = await fetch(
@@ -304,11 +321,14 @@ export default function ValuationPage() {
     }
 
     window[GMAPS_CALLBACK] = onReady;
+    window.gm_authFailure = () => {
+      setMapsError('Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.');
+    };
 
     if (!document.querySelector('script[data-gmaps]')) {
       const script = document.createElement('script');
       script.setAttribute('data-gmaps', 'true');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&callback=${GMAPS_CALLBACK}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&libraries=places&callback=${GMAPS_CALLBACK}`;
       script.async = true;
       script.onerror = () => setMapsError('Google Maps API failed to load.');
       document.head.appendChild(script);

@@ -77,11 +77,14 @@ export default function PropertyDetails() {
     }
 
     window[GMAPS_CALLBACK] = onReady;
+    window.gm_authFailure = () => {
+      setMapsError('Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.');
+    };
 
     if (!document.querySelector('script[data-gmaps]')) {
       const script = document.createElement('script');
       script.setAttribute('data-gmaps', 'true');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&callback=${GMAPS_CALLBACK}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&libraries=places&callback=${GMAPS_CALLBACK}`;
       script.async = true;
       script.onerror = () => setMapsError('Google Maps failed to load. Check API key and referrer restrictions.');
       document.head.appendChild(script);
@@ -116,6 +119,9 @@ export default function PropertyDetails() {
     markersRef.current.forEach(m => m.setMap(null));
     markersRef.current = [];
 
+    const bounds = new window.google.maps.LatLngBounds();
+    bounds.extend(center);
+
     // 2. Target Property Marker (Distinct Purple Marker)
     const targetMarker = new window.google.maps.Marker({
       position: center,
@@ -148,6 +154,7 @@ export default function PropertyDetails() {
     places.forEach(place => {
       if (!place.latitude || !place.longitude) return;
       const pos = { lat: place.latitude, lng: place.longitude };
+      bounds.extend(pos);
       const color = AMENITY_COLORS[place.category] || '#3b82f6';
 
       const marker = new window.google.maps.Marker({
@@ -178,6 +185,10 @@ export default function PropertyDetails() {
       marker.addListener('click', () => iw.open(map, marker));
       markersRef.current.push(marker);
     });
+
+    if (places.length > 0) {
+      map.fitBounds(bounds);
+    }
   }, [data]);
 
   useEffect(() => {
