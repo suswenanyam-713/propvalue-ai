@@ -47,10 +47,13 @@ def execute_property_valuation(
     5. Feeds Location Score and ML outputs into the Valuation adjustments pipeline.
     6. Logs the geocoded record (if database is writable) and outputs the structured audit breakdown.
     """
-    # 1. Location Resolution & Coordinate Validation
-    from backend.services.locationResolutionService import resolve_property_location
-    from backend.services.googlePlacesService import fetch_google_nearby_places
-    from backend.services.locationScoringService import compute_location_score
+    # Sanitize optional inputs for Plot/Commercial properties
+    bedrooms = bedrooms if bedrooms is not None else 0
+    bathrooms = bathrooms if bathrooms is not None else 0
+    floor = floor if floor is not None else 0
+    age = age if age is not None else 0
+    parking = parking if parking else "No"
+    furnishing = furnishing if furnishing else "Unfurnished"
 
     loc_res = resolve_property_location(latitude, longitude, city, locality)
     lat = loc_res["resolvedLatitude"]

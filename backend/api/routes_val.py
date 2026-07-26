@@ -39,12 +39,12 @@ class ValuationInputSchema(BaseModel):
     city: str
     locality: str
     area_sqft: float
-    bedrooms: int
-    bathrooms: int
-    floor: int
-    age: int
-    parking: str
-    furnishing: str
+    bedrooms: int | None = 0
+    bathrooms: int | None = 0
+    floor: int | None = 0
+    age: int | None = 0
+    parking: str | None = "No"
+    furnishing: str | None = "Unfurnished"
     latitude: float | None = None
     longitude: float | None = None
     address_str: str | None = None

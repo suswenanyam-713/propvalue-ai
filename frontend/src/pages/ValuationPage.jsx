@@ -5,15 +5,7 @@ import { Brain, TrendingUp, ShieldAlert, IndianRupee, AlertCircle, Loader2, MapP
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
 
-const CITIES = ['Chennai', 'Hyderabad', 'Pune', 'Mumbai', 'Bengaluru'];
-const LOCALITIES = {
-  Chennai: ['Velachery', 'OMR', 'Adyar', 'Anna Nagar'],
-  Hyderabad: ['Miyapur', 'Gachibowli', 'Madhapur', 'Banjara Hills', 'Jubilee Hills', 'Kondapur', 'Kukatpally'],
-  Pune: ['Hinjewadi', 'Kharadi', 'Wakad', 'Baner'],
-  Mumbai: ['Bandra', 'Powai', 'Andheri', 'Thane'],
-  Bengaluru: ['Indiranagar', 'Whitefield', 'Koramangala', 'HSR Layout', 'Electronic City'],
-};
-const TYPES = ['Apartment', 'Independent House', 'Plot', 'Villa'];
+const TYPES = ['Apartment', 'Independent House', 'Villa', 'Plot', 'Commercial'];
 const FURNISHING = ['Unfurnished', 'Semi', 'Fully'];
 
 const AMENITY_COLORS = {
@@ -86,6 +78,42 @@ export default function ValuationPage() {
   const previewMarkersRef = useRef([]);
   const resultMarkersRef = useRef([]);
 
+  // Dynamic Form Fields Visibility & Labels based on Property Type
+  const isPlot = form.property_type === 'Plot';
+  const isCommercial = form.property_type === 'Commercial';
+  const isVilla = form.property_type === 'Villa' || form.property_type === 'Independent House';
+
+  const showBedrooms = !isPlot && !isCommercial;
+  const showBathrooms = !isPlot && !isCommercial;
+  const showFloor = !isPlot && !isVilla;
+  const showAge = !isPlot;
+  const showParking = !isPlot;
+  const showFurnishing = !isPlot;
+
+  let areaLabel = 'Area (sq.ft)';
+  if (isPlot) areaLabel = 'Plot Area (sq.ft)';
+  else if (isVilla) areaLabel = 'Built-up Area (sq.ft)';
+  else if (isCommercial) areaLabel = 'Commercial Area (sq.ft)';
+
+  // Reset/clear irrelevant fields when Property Type changes
+  const handlePropertyTypeChange = (e) => {
+    const newType = e.target.value;
+    const targetPlot = newType === 'Plot';
+    const targetCommercial = newType === 'Commercial';
+    const targetVilla = newType === 'Villa' || newType === 'Independent House';
+
+    setForm(prev => ({
+      ...prev,
+      property_type: newType,
+      bedrooms: targetPlot || targetCommercial ? 0 : (prev.bedrooms || 3),
+      bathrooms: targetPlot || targetCommercial ? 0 : (prev.bathrooms || 2),
+      floor: targetPlot || targetVilla ? 0 : (prev.floor || 1),
+      age: targetPlot ? 0 : (prev.age || 2),
+      parking: targetPlot ? 'No' : (prev.parking || 'Yes'),
+      furnishing: targetPlot ? 'Unfurnished' : (prev.furnishing || 'Semi'),
+    }));
+  };
+
   // Fetch Live Nearby Amenities using centralized endpoint
   const fetchLiveNearbyAmenities = useCallback(async (lat, lon, city, locality) => {
     const numLat = Number(lat);
@@ -151,12 +179,10 @@ export default function ValuationPage() {
         locality: detectedLocality,
       }));
 
-      // Refresh live nearby amenities automatically
       fetchLiveNearbyAmenities(numLat, numLng, detectedCity, detectedLocality);
       setIsGeocoding(false);
     };
 
-    // 1. Try Browser-Native Google Geocoder if loaded
     if (window.google && window.google.maps && window.google.maps.Geocoder) {
       try {
         const geocoder = new window.google.maps.Geocoder();
@@ -166,7 +192,6 @@ export default function ValuationPage() {
             processComponents(place.address_components, place.formatted_address);
           } else {
             console.error('[Reverse Geocoding] Browser geocoder status error:', status);
-            // Fallback to backend reverse geocode endpoint
             axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
               .then(res => {
                 if (res.data?.formatted_address) {
@@ -191,7 +216,6 @@ export default function ValuationPage() {
       }
     }
 
-    // 2. Fallback to backend reverse geocoding API route
     axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
       .then(res => {
         if (res.data?.formatted_address) {
@@ -217,7 +241,6 @@ export default function ValuationPage() {
     reverseGeocodeCoordinates(lat, lng);
   }, 650);
 
-  // Handle Manual Latitude Change
   const handleLatitudeChange = (e) => {
     const rawVal = e.target.value;
     const numVal = parseFloat(rawVal);
@@ -227,7 +250,6 @@ export default function ValuationPage() {
     }
   };
 
-  // Handle Manual Longitude Change
   const handleLongitudeChange = (e) => {
     const rawVal = e.target.value;
     const numVal = parseFloat(rawVal);
@@ -254,7 +276,6 @@ export default function ValuationPage() {
         previewMapInstanceRef.current.setCenter(center);
       }
 
-      // Clear old preview markers safely
       if (Array.isArray(previewMarkersRef.current)) {
         previewMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
       }
@@ -263,7 +284,6 @@ export default function ValuationPage() {
       const bounds = new window.google.maps.LatLngBounds();
       bounds.extend(center);
 
-      // Target Property Marker (Purple)
       const targetMarker = new window.google.maps.Marker({
         position: center, map: previewMapInstanceRef.current, title: 'Target Location',
         icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
@@ -271,7 +291,6 @@ export default function ValuationPage() {
       });
       previewMarkersRef.current.push(targetMarker);
 
-      // Render Markers for Google Places
       if (Array.isArray(placesList)) {
         placesList.forEach(pl => {
           if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
@@ -303,7 +322,6 @@ export default function ValuationPage() {
     }
   }, []);
 
-  // ─── Load Maps JS API Safely via Centralized Loader ──────────────────────────────
   useEffect(() => {
     loadGoogleMapsScript()
       .then(() => {
@@ -317,12 +335,10 @@ export default function ValuationPage() {
       });
   }, []);
 
-  // Initial reverse geocoding & live places fetch on mount
   useEffect(() => {
     reverseGeocodeCoordinates(form.latitude, form.longitude);
   }, []);
 
-  // Update preview map when coords or amenities update
   useEffect(() => {
     if (isGoogleLoaded && previewMapRef.current) {
       renderPreviewMap(form.latitude, form.longitude, nearbyAmenities);
@@ -342,8 +358,16 @@ export default function ValuationPage() {
         ...form,
         latitude: Number(form.latitude),
         longitude: Number(form.longitude),
+        area_sqft: Number(form.area_sqft) || 1000,
+        bedrooms: isPlot || isCommercial ? 0 : Number(form.bedrooms) || 0,
+        bathrooms: isPlot || isCommercial ? 0 : Number(form.bathrooms) || 0,
+        floor: isPlot || isVilla ? 0 : Number(form.floor) || 0,
+        age: isPlot ? 0 : Number(form.age) || 0,
+        parking: isPlot ? 'No' : form.parking,
+        furnishing: isPlot ? 'Unfurnished' : form.furnishing,
         detected_address: detectedAddress
       };
+
       const res = await axios.post('/api/predict', payload);
       setResult(res.data);
 
@@ -380,7 +404,6 @@ export default function ValuationPage() {
     return `₹${Number(price).toLocaleString('en-IN')}`;
   };
 
-  // Categorize amenities into groups
   const activeAmenitiesList = result?.nearbyAmenities?.length > 0 ? result.nearbyAmenities : nearbyAmenities;
 
   const filteredAmenities = activeAmenitiesList.filter(pl => {
@@ -396,7 +419,6 @@ export default function ValuationPage() {
 
   const activeCategories = Array.from(new Set(filteredAmenities.map(pl => pl.category).filter(Boolean)));
 
-  // ─── Synchronized Result Map Renderer with DOM Detach Check & Bounds ────────────
   const renderResultMap = useCallback(() => {
     try {
       if (!window.google || !window.google.maps || !mapContainerRef.current) return;
@@ -407,7 +429,6 @@ export default function ValuationPage() {
       const safeLng = Number.isFinite(Number(rawLng)) ? Number(rawLng) : 78.3908;
       const targetLatLng = { lat: safeLat, lng: safeLng };
 
-      // Handle DOM unmount / remount detach check for conditional result container
       if (googleMapInstance.current && googleMapInstance.current.getDiv) {
         try {
           if (googleMapInstance.current.getDiv() !== mapContainerRef.current) {
@@ -427,7 +448,6 @@ export default function ValuationPage() {
       const map = googleMapInstance.current;
       map.setCenter(targetLatLng);
 
-      // Clear existing result markers
       if (Array.isArray(resultMarkersRef.current)) {
         resultMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
       }
@@ -436,7 +456,6 @@ export default function ValuationPage() {
       const bounds = new window.google.maps.LatLngBounds();
       bounds.extend(targetLatLng);
 
-      // Target Property Marker (Purple)
       const targetMarker = new window.google.maps.Marker({
         position: targetLatLng, map, title: 'Target Location',
         icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
@@ -448,7 +467,6 @@ export default function ValuationPage() {
       targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
       resultMarkersRef.current.push(targetMarker);
 
-      // Render Markers for filteredAmenities
       if (Array.isArray(filteredAmenities)) {
         filteredAmenities.forEach(pl => {
           if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
@@ -509,7 +527,7 @@ export default function ValuationPage() {
                 <Compass className="h-5 w-5 text-violet-400" /> Property Specifications
               </h2>
 
-              {/* Auto-detected City & Locality Controls (Source of Truth: Coordinates) */}
+              {/* Auto-detected City & Locality Controls */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">City (Auto-Detected)</label>
@@ -531,7 +549,7 @@ export default function ValuationPage() {
                 </div>
               </div>
 
-              {/* Editable Latitude & Longitude Inputs (Primary Controls) */}
+              {/* Editable Latitude & Longitude Inputs */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Latitude (°N)</label>
@@ -611,47 +629,109 @@ export default function ValuationPage() {
                 {mapsError && <p className="text-[11px] text-amber-400 font-medium">{mapsError}</p>}
               </div>
 
-              {/* Property Details Grid */}
+              {/* Property Details Grid (Dynamic based on selected Property Type) */}
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">Property Type</label>
-                  <select value={form.property_type} onChange={e => setForm({ ...form, property_type: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                  <select
+                    value={form.property_type}
+                    onChange={handlePropertyTypeChange}
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-semibold text-violet-300"
+                  >
                     {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Area (sq.ft)</label>
-                  <input type="number" value={form.area_sqft} onChange={e => setForm({ ...form, area_sqft: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">{areaLabel}</label>
+                  <input
+                    type="number"
+                    value={form.area_sqft}
+                    onChange={e => setForm({ ...form, area_sqft: parseInt(e.target.value) || 0 })}
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                  />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Bedrooms (BHK)</label>
-                  <input type="number" value={form.bedrooms} onChange={e => setForm({ ...form, bedrooms: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Bathrooms</label>
-                  <input type="number" value={form.bathrooms} onChange={e => setForm({ ...form, bathrooms: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Floor Level</label>
-                  <input type="number" value={form.floor} onChange={e => setForm({ ...form, floor: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Property Age (Yrs)</label>
-                  <input type="number" value={form.age} onChange={e => setForm({ ...form, age: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Parking</label>
-                  <select value={form.parking} onChange={e => setForm({ ...form, parking: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
-                    <option value="Yes">Yes</option>
-                    <option value="No">No</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Furnishing</label>
-                  <select value={form.furnishing} onChange={e => setForm({ ...form, furnishing: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
-                    {FURNISHING.map(f => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                </div>
+
+                {/* Show Bedrooms for Apartment & Villa */}
+                {showBedrooms && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Bedrooms (BHK)</label>
+                    <input
+                      type="number"
+                      value={form.bedrooms}
+                      onChange={e => setForm({ ...form, bedrooms: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                )}
+
+                {/* Show Bathrooms for Apartment & Villa */}
+                {showBathrooms && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Bathrooms</label>
+                    <input
+                      type="number"
+                      value={form.bathrooms}
+                      onChange={e => setForm({ ...form, bathrooms: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                )}
+
+                {/* Show Floor Level for Apartment & Commercial */}
+                {showFloor && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Floor Level</label>
+                    <input
+                      type="number"
+                      value={form.floor}
+                      onChange={e => setForm({ ...form, floor: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                )}
+
+                {/* Show Property Age for Apartment, Villa, Independent House, Commercial */}
+                {showAge && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Property Age (Yrs)</label>
+                    <input
+                      type="number"
+                      value={form.age}
+                      onChange={e => setForm({ ...form, age: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    />
+                  </div>
+                )}
+
+                {/* Show Parking for Apartment, Villa, Independent House, Commercial */}
+                {showParking && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Parking</label>
+                    <select
+                      value={form.parking}
+                      onChange={e => setForm({ ...form, parking: e.target.value })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    >
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Show Furnishing for Apartment, Villa, Independent House, Commercial */}
+                {showFurnishing && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Furnishing</label>
+                    <select
+                      value={form.furnishing}
+                      onChange={e => setForm({ ...form, furnishing: e.target.value })}
+                      className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500"
+                    >
+                      {FURNISHING.map(f => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
 
               {error && (
