@@ -11,6 +11,9 @@ def get_locality_market_trends(city: str, locality_name: str, db: Session) -> di
     - Property type distribution
     - Historical price trends (average price per sq.ft index)
     - Demand Indicator
+    
+    NOTE: This is a READ-ONLY service function. It calculates metrics in memory
+    and performs NO database mutations/updates so it executes cleanly on read-only environments.
     """
     locality_clean = locality_name.strip().lower()
     city_clean = city.strip().lower()
@@ -91,32 +94,6 @@ def get_locality_market_trends(city: str, locality_name: str, db: Session) -> di
             "growth_percentage": hp.growth_percentage,
             "demand": hp.demand_index
         })
-        
-    # Check if there is an existing Locality cache entry; update or insert it
-    locality_cache = db.query(Locality).filter(
-        Locality.city.ilike(city_clean),
-        Locality.name.ilike(locality_clean)
-    ).first()
-    
-    if not locality_cache:
-        locality_cache = Locality(
-            city=city,
-            name=locality_name,
-            avg_price_sqft=avg_price_sqft,
-            median_price=median_price,
-            demand_indicator=demand_level,
-            active_listings_count=total_listings,
-            data_source="Platform Analytics Engine",
-            last_updated=datetime.datetime.utcnow()
-        )
-        db.add(locality_cache)
-    else:
-        locality_cache.avg_price_sqft = avg_price_sqft
-        locality_cache.median_price = median_price
-        locality_cache.demand_indicator = demand_level
-        locality_cache.active_listings_count = total_listings
-        locality_cache.last_updated = datetime.datetime.utcnow()
-    db.commit()
 
     return {
         "city": city,

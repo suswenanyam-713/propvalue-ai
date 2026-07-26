@@ -45,7 +45,7 @@ def execute_property_valuation(
     3. Calculates a Location Score based on proximity and counts.
     4. Computes comparable matching properties and market average sqft pricing.
     5. Feeds Location Score and ML outputs into the Valuation adjustments pipeline.
-    6. Logs the geocoded record and outputs the structured audit breakdown.
+    6. Logs the geocoded record (if database is writable) and outputs the structured audit breakdown.
     """
     # 1. Location Resolution & Coordinate Validation
     from backend.services.locationResolutionService import resolve_property_location
@@ -105,7 +105,6 @@ def execute_property_valuation(
     predicted_price = max(100000.0, predicted_price)
 
     # 7. Apply Google Maps proximity multiplier to final ML valuation
-    # Higher Location Score boosts valuation by up to +10%, low scores penalize by up to -10%
     location_multiplier = 0.90 + (location_score / 500.0) # ranges [0.90, 1.10]
     final_estimated_value = predicted_price * location_multiplier
     final_estimated_value = max(100000.0, final_estimated_value)
@@ -136,53 +135,61 @@ def execute_property_valuation(
     
     confidence = calculate_confidence_score(comparables, total_listings, len(amenities))
 
-    # 9. Save geocoded Prediction log to database
-    db_prediction = Prediction(
-        user_id=user_id,
-        property_type=property_type,
-        city=city,
-        locality=locality,
-        area_sqft=area_sqft,
-        bedrooms=bedrooms,
-        bathrooms=bathrooms,
-        floor=floor,
-        parking=parking,
-        furnishing=furnishing,
-        age=age,
-        latitude=lat,
-        longitude=lon,
-        predicted_price=final_estimated_value,
-        confidence_score=confidence,
-        location_score=location_score,
-        nearest_school_dist=score_details.get("nearest_school_distance", 1.5),
-        nearest_hospital_dist=score_details.get("nearest_hospital_distance", 1.5),
-        nearest_transit_dist=score_details.get("nearest_metro_distance", 1.5),
-        nearest_mall_dist=score_details.get("nearest_mall_distance", 1.5),
-        nearby_school_count=score_details.get("nearby_school_count", 0),
-        nearby_hospital_count=score_details.get("nearby_hospital_count", 0),
-        nearby_transit_count=score_details.get("nearby_transit_count", 0),
-        nearby_shopping_count=score_details.get("nearby_shopping_count", 0),
-        investment_score=int(min(98, max(40, 75 + (confidence * 15) + (location_score / 20.0)))),
-        risk_score=int(min(90, max(15, 45 - (confidence * 20) - (location_score / 25.0)))),
-        created_at=datetime.datetime.utcnow()
-    )
-    db.add(db_prediction)
-    db.commit()
-    db.refresh(db_prediction)
-    
-    # Save valuation comparable link table mapping
-    comp_objects = []
-    for comp in comparables[:3]:
-        vc = ValuationComparable(
-            prediction_id=db_prediction.id,
-            property_id=comp["id"],
-            distance_km=comp["distance_km"],
-            similarity_score=comp["similarity_score"]
+    # 9. Optionally persist prediction log if database is writable; skip safely if read-only
+    prediction_id = 0
+    inv_score = int(min(98, max(40, 75 + (confidence * 15) + (location_score / 20.0))))
+    risk_score = int(min(90, max(15, 45 - (confidence * 20) - (location_score / 25.0))))
+
+    try:
+        db_prediction = Prediction(
+            user_id=user_id,
+            property_type=property_type,
+            city=city,
+            locality=locality,
+            area_sqft=area_sqft,
+            bedrooms=bedrooms,
+            bathrooms=bathrooms,
+            floor=floor,
+            parking=parking,
+            furnishing=furnishing,
+            age=age,
+            latitude=lat,
+            longitude=lon,
+            predicted_price=final_estimated_value,
+            confidence_score=confidence,
+            location_score=location_score,
+            nearest_school_dist=score_details.get("nearest_school_distance", 1.5),
+            nearest_hospital_dist=score_details.get("nearest_hospital_distance", 1.5),
+            nearest_transit_dist=score_details.get("nearest_metro_distance", 1.5),
+            nearest_mall_dist=score_details.get("nearest_mall_distance", 1.5),
+            nearby_school_count=score_details.get("nearby_school_count", 0),
+            nearby_hospital_count=score_details.get("nearby_hospital_count", 0),
+            nearby_transit_count=score_details.get("nearby_transit_count", 0),
+            nearby_shopping_count=score_details.get("nearby_shopping_count", 0),
+            investment_score=inv_score,
+            risk_score=risk_score,
+            created_at=datetime.datetime.utcnow()
         )
-        comp_objects.append(vc)
-    if comp_objects:
-        db.add_all(comp_objects)
+        db.add(db_prediction)
         db.commit()
+        db.refresh(db_prediction)
+        prediction_id = db_prediction.id
+
+        comp_objects = []
+        for comp in comparables[:3]:
+            vc = ValuationComparable(
+                prediction_id=db_prediction.id,
+                property_id=comp["id"],
+                distance_km=comp["distance_km"],
+                similarity_score=comp["similarity_score"]
+            )
+            comp_objects.append(vc)
+        if comp_objects:
+            db.add_all(comp_objects)
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[Valuation Pipeline Notice] DB log write skipped on read-only database: {e}")
 
     range_min = final_estimated_value * 0.92
     range_max = final_estimated_value * 1.08
@@ -198,19 +205,14 @@ def execute_property_valuation(
         f"**Final Estimated Property Value**: **{new_inr_format(final_estimated_value)}**\n"
     )
 
-    # Compile data sources list
     data_sources = {
         "property_market_data": "PropValue AI Seeding Database Listings Cache",
         "location_data": "Google Maps Platform (Geocoding & Places APIs)",
         "valuation_engine": "XGBoost ML Regressor + Spatial Accessibility adjustments"
     }
 
-    # Match exact keys requested in Component 13:
-    # estimatedValue, minimumEstimatedValue, maximumEstimatedValue, pricePerSqFt,
-    # confidenceScore, locationScore, marketTrend, comparableProperties,
-    # nearbyAmenities, propertyCoordinates, dataSources, lastUpdated
     return {
-        "id": db_prediction.id,
+        "id": prediction_id,
         "estimatedValue": final_estimated_value,
         "minimumEstimatedValue": round(range_min, 2),
         "maximumEstimatedValue": round(range_max, 2),
@@ -231,11 +233,10 @@ def execute_property_valuation(
         "dataSources": data_sources,
         "lastUpdated": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         
-        # Keep old keys to prevent breaking existing endpoints
         "predicted_price": final_estimated_value,
         "confidence_score": confidence,
-        "investment_score": db_prediction.investment_score,
-        "risk_score": db_prediction.risk_score,
+        "investment_score": inv_score,
+        "risk_score": risk_score,
         "ai_explanation": explanation,
         "data_source": "Google Maps + PropValue AI",
         "last_updated": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")

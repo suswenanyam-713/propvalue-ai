@@ -88,11 +88,12 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip() or "AIzaSyD574mnVYIvct8zVxItegPKsq5wmx-kOcQ"
 
     url = "https://places.googleapis.com/v1/places:searchNearby"
+    # IMPORTANT: Server-side REST calls must NOT pass a fake localhost Referer header,
+    # as keys configured with website HTTP referrer restrictions will return 403 / REQUEST_DENIED.
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.rating,places.userRatingCount,places.googleMapsUri,places.businessStatus",
-        "Referer": "http://localhost:3000/"
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.rating,places.userRatingCount,places.googleMapsUri,places.businessStatus"
     }
 
     payload = {
@@ -148,6 +149,8 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
                 })
 
             places_list.sort(key=lambda x: x["distance_km"])
+        else:
+            print(f"[GooglePlacesService] Response status: {response.status_code}, text: {response.text[:200]}")
     except Exception as e:
         print(f"[GooglePlacesService] Request failed: {e}")
 

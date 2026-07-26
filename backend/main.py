@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 from dotenv import load_dotenv
 
@@ -55,14 +56,32 @@ def read_root():
         "docs_url": "/docs"
     }
 
-# Mount React SPA build as static files LAST (catch-all fallback)
-# On Vercel: the build copies frontend/dist/* to api/static/
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "api", "static")
 
-if os.path.exists(STATIC_DIR):
-    # html=True enables SPA mode: serves index.html for unmatched routes
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")
+# Catch-all SPA route handler for direct navigation & browser refreshes (/valuation, /properties, etc.)
+@app.get("/{full_path:path}")
+def catch_all_spa_routing(full_path: str):
+    # Pass unmatched /api/* requests to standard 404 JSON response
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(status_code=404, detail="API endpoint not found")
+    
+    # 1. Check if requesting specific static asset file (e.g. assets/index-Ct3xKNzX.js)
+    if os.path.exists(STATIC_DIR):
+        file_path = os.path.join(STATIC_DIR, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        
+        index_path = os.path.join(STATIC_DIR, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+
+    # 2. Check frontend/dist fallback
+    dist_index = os.path.join(BASE_DIR, "frontend", "dist", "index.html")
+    if os.path.exists(dist_index):
+        return FileResponse(dist_index)
+
+    raise HTTPException(status_code=404, detail="Page not found")
 
 if __name__ == "__main__":
     import uvicorn
