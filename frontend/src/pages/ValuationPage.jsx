@@ -112,6 +112,7 @@ export default function ValuationPage() {
     if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteService) {
       if (!acServiceRef.current) {
         acServiceRef.current = new window.google.maps.places.AutocompleteService();
+        console.log("[Google Places] AutocompleteService initialized successfully");
       }
       return acServiceRef.current;
     }
@@ -159,12 +160,13 @@ export default function ValuationPage() {
             setShowDropdown(true);
             setAcError('');
             setSelectedIndex(-1);
+            console.log(`[Google Places] Returned ${predictions.length} live predictions for query: "${query}"`);
             return;
           }
 
-          console.error("Google Places autocomplete failed:", status);
+          console.error("[Google Places] Autocomplete status error:", status);
 
-          // Attempt backend proxy as a secondary live API lookup
+          // Secondary live API lookup using backend proxy
           try {
             const res = await axios.get('/api/location/search', { params: { input: query } });
             const proxyPreds = res.data?.predictions || [];
@@ -177,7 +179,7 @@ export default function ValuationPage() {
               return;
             }
           } catch (backendErr) {
-            console.error("Backend autocomplete proxy failed:", backendErr);
+            console.error("[Google Places] Backend autocomplete proxy failed:", backendErr);
           }
 
           setIsSearchingAc(false);
@@ -193,7 +195,7 @@ export default function ValuationPage() {
         });
         return;
       } catch (err) {
-        console.error("Google Places autocomplete failed:", err);
+        console.error("[Google Places] Autocomplete exception:", err);
       }
     }
 
@@ -210,7 +212,7 @@ export default function ValuationPage() {
         }
       })
       .catch(err => {
-        console.error("Google Places autocomplete failed:", err);
+        console.error("[Google Places] Backend proxy autocomplete exception:", err);
         setAcError('Unable to load Google location suggestions.');
       })
       .finally(() => {
@@ -228,10 +230,14 @@ export default function ValuationPage() {
 
   // Fetch Live Nearby Amenities using centralized endpoint
   const fetchLiveNearbyAmenities = useCallback(async (lat, lon, city, locality) => {
+    const numLat = Number(lat);
+    const numLon = Number(lon);
+    if (!Number.isFinite(numLat) || !Number.isFinite(numLon)) return;
+
     setLoadingAmenities(true);
     try {
       const res = await axios.get('/api/places/nearby', {
-        params: { lat, lon, city, locality, radius: 3000 }
+        params: { lat: numLat, lon: numLon, city, locality, radius: 3000 }
       });
       const places = res.data?.places || [];
       setNearbyAmenities(places);
@@ -242,6 +248,10 @@ export default function ValuationPage() {
       setLoadingAmenities(false);
     }
   }, []);
+
+  const debouncedRefreshNearby = useDebounce((lat, lng, city, locality) => {
+    fetchLiveNearbyAmenities(lat, lng, city, locality);
+  }, 450);
 
   // Handle Autocomplete Item Selection
   const handleSelectSuggestion = useCallback((prediction) => {
@@ -407,6 +417,10 @@ export default function ValuationPage() {
       .then(() => {
         setIsGoogleLoaded(true);
         setMapsError('');
+        console.log("[Google Maps] Maps loaded successfully");
+        if (window.google && window.google.maps && window.google.maps.places) {
+          console.log("[Google Places] Places library loaded successfully");
+        }
       })
       .catch(err => {
         setIsGoogleLoaded(false);
@@ -585,7 +599,7 @@ export default function ValuationPage() {
               <div style="color:#0f172a;font-family:sans-serif;font-size:12px;padding:6px;max-width:220px;">
                 <strong style="font-size:13px;color:#1e293b;">${pl.name || 'Place'}</strong><br/>
                 <span style="font-size:11px;color:#64748b;">${pl.category || ''} · <strong>${pl.distance_km || 0} km</strong></span><br/>
-                ${pl.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span>` : ''}
+                ${pl.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span><br/>` : ''}
                 ${pl.address ? `<span style="font-size:11px;color:#475569;">${pl.address}</span>` : ''}
               </div>
             `
@@ -688,11 +702,57 @@ export default function ValuationPage() {
                 </div>
               </div>
 
-              {/* Coordinates Indicator */}
+              {/* Restored Editable Latitude & Longitude Inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Latitude (°N)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="-90"
+                    max="90"
+                    value={form.latitude}
+                    onChange={(e) => {
+                      const rawVal = e.target.value;
+                      const val = parseFloat(rawVal);
+                      if (!isNaN(val) && val >= -90 && val <= 90) {
+                        setForm(prev => ({ ...prev, latitude: val }));
+                        debouncedRefreshNearby(val, form.longitude, form.city, form.locality);
+                      } else {
+                        setForm(prev => ({ ...prev, latitude: rawVal }));
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Longitude (°E)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="-180"
+                    max="180"
+                    value={form.longitude}
+                    onChange={(e) => {
+                      const rawVal = e.target.value;
+                      const val = parseFloat(rawVal);
+                      if (!isNaN(val) && val >= -180 && val <= 180) {
+                        setForm(prev => ({ ...prev, longitude: val }));
+                        debouncedRefreshNearby(form.latitude, val, form.city, form.locality);
+                      } else {
+                        setForm(prev => ({ ...prev, longitude: rawVal }));
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Coordinates Geocoded Status Indicator */}
               <div className="flex items-center justify-between text-[11px] bg-slate-900/60 p-2.5 rounded-xl border border-white/5 text-slate-400">
                 <span className="flex items-center gap-1.5 font-mono">
                   <MapPin className="h-3.5 w-3.5 text-violet-400" />
-                  {form.latitude?.toFixed(4)}, {form.longitude?.toFixed(4)}
+                  {Number(form.latitude)?.toFixed(4)}, {Number(form.longitude)?.toFixed(4)}
                 </span>
                 <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" /> Geocoded
