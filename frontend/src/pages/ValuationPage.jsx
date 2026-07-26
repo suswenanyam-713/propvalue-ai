@@ -3,7 +3,7 @@ import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Brain, TrendingUp, ShieldAlert, IndianRupee, AlertCircle, Loader2, MapPin, Sparkles, Building, Compass, Calendar, CheckCircle2, ExternalLink, Navigation } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
+import GooglePropertyMap from '../components/GooglePropertyMap';
 
 const TYPES = ['Apartment', 'Independent House', 'Villa', 'Plot', 'Commercial'];
 const FURNISHING = ['Unfurnished', 'Semi', 'Fully'];
@@ -25,15 +25,6 @@ const CATEGORY_GROUP_MAP = {
   Bank: 'Essentials',
 };
 
-const MAP_DARK_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1f2937' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ca3af' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#111827' }] },
-  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-];
-
 // Debounce helper
 function useDebounce(fn, delay) {
   const timer = useRef(null);
@@ -44,8 +35,6 @@ function useDebounce(fn, delay) {
 }
 
 export default function ValuationPage() {
-  const clientApiKey = getGoogleMapsApiKey();
-
   // Coordinate-driven state (Latitude & Longitude as single source of truth)
   const [form, setForm] = useState({
     city: 'Hyderabad', locality: 'Gachibowli', property_type: 'Apartment',
@@ -67,16 +56,6 @@ export default function ValuationPage() {
   const [nearbyAmenities, setNearbyAmenities] = useState([]);
   const [loadingAmenities, setLoadingAmenities] = useState(false);
   const [selectedFilterGroup, setSelectedFilterGroup] = useState('All');
-
-  // Google Maps JS API State & Refs
-  const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
-  const [mapsError, setMapsError] = useState('');
-  const previewMapRef = useRef(null);
-  const mapContainerRef = useRef(null);
-  const previewMapInstanceRef = useRef(null);
-  const googleMapInstance = useRef(null);
-  const previewMarkersRef = useRef([]);
-  const resultMarkersRef = useRef([]);
 
   // Dynamic Form Fields Visibility & Labels based on Property Type
   const isPlot = form.property_type === 'Plot';
@@ -135,106 +114,69 @@ export default function ValuationPage() {
     }
   }, []);
 
-  // REAL Google Reverse Geocoding from Latitude + Longitude
+  // REAL Reverse Geocoding from Latitude + Longitude with try-catch-finally loading clear
   const reverseGeocodeCoordinates = useCallback((lat, lng) => {
     const numLat = Number(lat);
     const numLng = Number(lng);
 
     if (!Number.isFinite(numLat) || !Number.isFinite(numLng) || numLat < -90 || numLat > 90 || numLng < -180 || numLng > 180) {
       setDetectedAddress('Invalid coordinates');
+      setIsGeocoding(false);
       return;
     }
 
     setIsGeocoding(true);
     setDetectedAddress('Detecting address...');
 
-    const processComponents = (components, formattedAddress) => {
-      let locality = '', city = '';
-      for (const comp of (components || [])) {
-        const types = comp.types || [];
-        if (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood')) {
-          if (!locality) locality = comp.long_name;
-        } else if (types.includes('locality')) {
-          if (!locality) locality = comp.long_name;
-          if (!city) city = comp.long_name;
-        } else if (types.includes('administrative_area_level_2')) {
-          if (!city) city = comp.long_name;
-        } else if (types.includes('administrative_area_level_1')) {
-          if (!city) city = comp.long_name;
-        }
+    const applyAddressData = (formatted, city, locality) => {
+      setDetectedAddress(formatted || 'Address unavailable');
+      if (city || locality) {
+        setForm(prev => ({
+          ...prev,
+          city: city || prev.city,
+          locality: locality || prev.locality,
+        }));
       }
-
-      const CITY_MAP = {
-        Hyderabad: 'Hyderabad', Chennai: 'Chennai', Pune: 'Pune',
-        Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
-      };
-
-      const detectedCity = CITY_MAP[city] || city || form.city;
-      const detectedLocality = locality || formattedAddress.split(',')[0] || form.locality;
-
-      setDetectedAddress(formattedAddress);
-      setForm(prev => ({
-        ...prev,
-        city: detectedCity,
-        locality: detectedLocality,
-      }));
-
-      fetchLiveNearbyAmenities(numLat, numLng, detectedCity, detectedLocality);
-      setIsGeocoding(false);
+      fetchLiveNearbyAmenities(numLat, numLng, city || form.city, locality || form.locality);
     };
-
-    if (window.google && window.google.maps && window.google.maps.Geocoder) {
-      try {
-        const geocoder = new window.google.maps.Geocoder();
-        geocoder.geocode({ location: { lat: numLat, lng: numLng } }, (results, status) => {
-          if (status === 'OK' && results && results[0]) {
-            const place = results[0];
-            processComponents(place.address_components, place.formatted_address);
-          } else {
-            console.error('[Reverse Geocoding] Browser geocoder status error:', status);
-            axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
-              .then(res => {
-                if (res.data?.formatted_address) {
-                  setDetectedAddress(res.data.formatted_address);
-                  setForm(prev => ({
-                    ...prev,
-                    city: res.data.city || prev.city,
-                    locality: res.data.locality || prev.locality,
-                  }));
-                  fetchLiveNearbyAmenities(numLat, numLng, res.data.city || form.city, res.data.locality || form.locality);
-                } else {
-                  setDetectedAddress('Address unavailable for these coordinates');
-                }
-              })
-              .catch(() => setDetectedAddress('Address unavailable for these coordinates'))
-              .finally(() => setIsGeocoding(false));
-          }
-        });
-        return;
-      } catch (err) {
-        console.error('[Reverse Geocoding] Exception:', err);
-      }
-    }
 
     axios.get('/api/location/reverse', { params: { lat: numLat, lon: numLng } })
       .then(res => {
-        if (res.data?.formatted_address) {
-          setDetectedAddress(res.data.formatted_address);
-          setForm(prev => ({
-            ...prev,
-            city: res.data.city || prev.city,
-            locality: res.data.locality || prev.locality,
-          }));
-          fetchLiveNearbyAmenities(numLat, numLng, res.data.city || form.city, res.data.locality || form.locality);
+        if (res.data?.formatted_address && !res.data.formatted_address.includes('Coordinates (')) {
+          applyAddressData(res.data.formatted_address, res.data.city, res.data.locality);
+        } else if (window.google && window.google.maps && window.google.maps.Geocoder) {
+          const geocoder = new window.google.maps.Geocoder();
+          geocoder.geocode({ location: { lat: numLat, lng: numLng } }, (results, status) => {
+            if (status === 'OK' && results && results[0]) {
+              const place = results[0];
+              let locality = '', city = '';
+              for (const comp of (place.address_components || [])) {
+                const types = comp.types || [];
+                if (types.includes('sublocality_level_1') || types.includes('sublocality')) {
+                  if (!locality) locality = comp.long_name;
+                } else if (types.includes('locality')) {
+                  if (!locality) locality = comp.long_name;
+                  if (!city) city = comp.long_name;
+                } else if (types.includes('administrative_area_level_2')) {
+                  if (!city) city = comp.long_name;
+                }
+              }
+              applyAddressData(place.formatted_address, city, locality);
+            } else {
+              applyAddressData('Address unavailable', null, null);
+            }
+          });
         } else {
-          setDetectedAddress('Address unavailable for these coordinates');
+          applyAddressData('Address unavailable', null, null);
         }
       })
       .catch(err => {
-        console.error('[Reverse Geocoding] Backend API exception:', err);
-        setDetectedAddress('Address unavailable for these coordinates');
+        console.warn('Reverse geocode error:', err);
+        applyAddressData('Address unavailable', null, null);
       })
-      .finally(() => setIsGeocoding(false));
+      .finally(() => {
+        setIsGeocoding(false);
+      });
   }, [form.city, form.locality, fetchLiveNearbyAmenities]);
 
   const debouncedReverseGeocode = useDebounce((lat, lng) => {
@@ -259,91 +201,9 @@ export default function ValuationPage() {
     }
   };
 
-  // ─── Safely Render Preview Map ─────────────────────────────────────────────
-  const renderPreviewMap = useCallback((lat, lng, placesList = []) => {
-    try {
-      if (!window.google || !window.google.maps || !previewMapRef.current) return;
-      
-      const safeLat = Number.isFinite(Number(lat)) ? Number(lat) : 17.4485;
-      const safeLng = Number.isFinite(Number(lng)) ? Number(lng) : 78.3908;
-      const center = { lat: safeLat, lng: safeLng };
-
-      if (!previewMapInstanceRef.current) {
-        previewMapInstanceRef.current = new window.google.maps.Map(previewMapRef.current, {
-          center, zoom: 14, styles: MAP_DARK_STYLE, zoomControl: true,
-        });
-      } else {
-        previewMapInstanceRef.current.setCenter(center);
-      }
-
-      if (Array.isArray(previewMarkersRef.current)) {
-        previewMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
-      }
-      previewMarkersRef.current = [];
-
-      const bounds = new window.google.maps.LatLngBounds();
-      bounds.extend(center);
-
-      const targetMarker = new window.google.maps.Marker({
-        position: center, map: previewMapInstanceRef.current, title: 'Target Location',
-        icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
-        zIndex: 999
-      });
-      previewMarkersRef.current.push(targetMarker);
-
-      if (Array.isArray(placesList)) {
-        placesList.forEach(pl => {
-          if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
-          const pos = { lat: Number(pl.latitude), lng: Number(pl.longitude) };
-          bounds.extend(pos);
-          const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
-          const marker = new window.google.maps.Marker({
-            position: pos,
-            map: previewMapInstanceRef.current,
-            title: pl.name || 'Place',
-            icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 5, fillColor: markerColor, fillOpacity: 0.85, strokeColor: '#fff', strokeWeight: 1 },
-          });
-          const iw = new window.google.maps.InfoWindow({
-            content: `<div style="color:#0f172a;font-family:sans-serif;font-size:12px;padding:4px;"><strong>${pl.name || 'Place'}</strong><br/><span style="color:#64748b;">${pl.category || ''} · ${pl.distance_km || 0} km</span>${pl.rating ? `<br/><span style="color:#d97706;">⭐ ${pl.rating}</span>` : ''}</div>`
-          });
-          marker.addListener('click', () => iw.open(previewMapInstanceRef.current, marker));
-          previewMarkersRef.current.push(marker);
-        });
-
-        if (placesList.length > 0) {
-          previewMapInstanceRef.current.fitBounds(bounds);
-        } else {
-          previewMapInstanceRef.current.setCenter(center);
-          previewMapInstanceRef.current.setZoom(14);
-        }
-      }
-    } catch (err) {
-      console.warn('Preview map render exception caught safely:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadGoogleMapsScript()
-      .then(() => {
-        setIsGoogleLoaded(true);
-        setMapsError('');
-        console.log("[Google Maps] Maps loaded successfully");
-      })
-      .catch(err => {
-        setIsGoogleLoaded(false);
-        setMapsError(err.message || 'Google Maps failed to load.');
-      });
-  }, []);
-
   useEffect(() => {
     reverseGeocodeCoordinates(form.latitude, form.longitude);
   }, []);
-
-  useEffect(() => {
-    if (isGoogleLoaded && previewMapRef.current) {
-      renderPreviewMap(form.latitude, form.longitude, nearbyAmenities);
-    }
-  }, [isGoogleLoaded, form.latitude, form.longitude, nearbyAmenities, renderPreviewMap]);
 
   // Submit Valuation Request
   const handleSubmit = async (e) => {
@@ -418,98 +278,6 @@ export default function ValuationPage() {
   );
 
   const activeCategories = Array.from(new Set(filteredAmenities.map(pl => pl.category).filter(Boolean)));
-
-  const renderResultMap = useCallback(() => {
-    try {
-      if (!window.google || !window.google.maps || !mapContainerRef.current) return;
-
-      const rawLat = result?.propertyCoordinates?.latitude ?? form.latitude;
-      const rawLng = result?.propertyCoordinates?.longitude ?? form.longitude;
-      const safeLat = Number.isFinite(Number(rawLat)) ? Number(rawLat) : 17.4485;
-      const safeLng = Number.isFinite(Number(rawLng)) ? Number(rawLng) : 78.3908;
-      const targetLatLng = { lat: safeLat, lng: safeLng };
-
-      if (googleMapInstance.current && googleMapInstance.current.getDiv) {
-        try {
-          if (googleMapInstance.current.getDiv() !== mapContainerRef.current) {
-            googleMapInstance.current = null;
-          }
-        } catch (e) {
-          googleMapInstance.current = null;
-        }
-      }
-
-      if (!googleMapInstance.current) {
-        googleMapInstance.current = new window.google.maps.Map(mapContainerRef.current, {
-          center: targetLatLng, zoom: 14, styles: MAP_DARK_STYLE, zoomControl: true,
-        });
-      }
-
-      const map = googleMapInstance.current;
-      map.setCenter(targetLatLng);
-
-      if (Array.isArray(resultMarkersRef.current)) {
-        resultMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
-      }
-      resultMarkersRef.current = [];
-
-      const bounds = new window.google.maps.LatLngBounds();
-      bounds.extend(targetLatLng);
-
-      const targetMarker = new window.google.maps.Marker({
-        position: targetLatLng, map, title: 'Target Location',
-        icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
-        zIndex: 999
-      });
-      const targetIw = new window.google.maps.InfoWindow({
-        content: `<div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:200px;"><strong style="color:#6d28d9;">Target Location</strong><br/><span style="font-size:11px;color:#475569;">${form.locality}, ${form.city}</span></div>`
-      });
-      targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
-      resultMarkersRef.current.push(targetMarker);
-
-      if (Array.isArray(filteredAmenities)) {
-        filteredAmenities.forEach(pl => {
-          if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
-          const pos = { lat: Number(pl.latitude), lng: Number(pl.longitude) };
-          bounds.extend(pos);
-
-          const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
-          const marker = new window.google.maps.Marker({
-            position: pos, map, title: pl.name || 'Place',
-            icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: markerColor, fillOpacity: 0.9, strokeColor: '#fff', strokeWeight: 1.5 },
-          });
-
-          const iw = new window.google.maps.InfoWindow({
-            content: `
-              <div style="color:#0f172a;font-family:sans-serif;font-size:12px;padding:6px;max-width:220px;">
-                <strong style="font-size:13px;color:#1e293b;">${pl.name || 'Place'}</strong><br/>
-                <span style="font-size:11px;color:#64748b;">${pl.category || ''} · <strong>${pl.distance_km || 0} km</strong></span><br/>
-                ${pl.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${pl.rating}</span><br/>` : ''}
-                ${pl.address ? `<span style="font-size:11px;color:#475569;">${pl.address}</span>` : ''}
-              </div>
-            `
-          });
-          marker.addListener('click', () => iw.open(map, marker));
-          resultMarkersRef.current.push(marker);
-        });
-      }
-
-      if (filteredAmenities && filteredAmenities.length > 0) {
-        map.fitBounds(bounds);
-      } else {
-        map.setCenter(targetLatLng);
-        map.setZoom(14);
-      }
-    } catch (err) {
-      console.warn('Result map render exception caught safely:', err);
-    }
-  }, [result, filteredAmenities, form.latitude, form.longitude, form.city, form.locality]);
-
-  useEffect(() => {
-    if (isGoogleLoaded && mapContainerRef.current) {
-      renderResultMap();
-    }
-  }, [isGoogleLoaded, result, filteredAmenities, renderResultMap]);
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-white px-4 py-10">
@@ -607,7 +375,7 @@ export default function ValuationPage() {
                 </span>
               </div>
 
-              {/* Interactive Location Preview Map */}
+              {/* Shared Single-Instance Location Preview Map */}
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center text-xs text-slate-300">
                   <span className="font-semibold flex items-center gap-1.5"><Compass className="h-3.5 w-3.5 text-violet-400" /> Location Preview Map</span>
@@ -615,18 +383,14 @@ export default function ValuationPage() {
                     <span className="text-[10px] text-violet-400 font-semibold">{nearbyAmenities.length} Google Places Loaded</span>
                   )}
                 </div>
-                <div
-                  ref={previewMapRef}
-                  id="preview-map-container"
-                  className="h-44 rounded-xl overflow-hidden border border-white/10 bg-slate-900 relative z-0 flex items-center justify-center"
-                >
-                  {!isGoogleLoaded && (
-                    <div className="text-slate-500 text-xs flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Map...
-                    </div>
-                  )}
-                </div>
-                {mapsError && <p className="text-[11px] text-amber-400 font-medium">{mapsError}</p>}
+                <GooglePropertyMap
+                  latitude={form.latitude}
+                  longitude={form.longitude}
+                  places={nearbyAmenities}
+                  height="h-44"
+                  title="Target Location"
+                  subTitle={`${form.locality}, ${form.city}`}
+                />
               </div>
 
               {/* Property Details Grid (Dynamic based on selected Property Type) */}
@@ -812,16 +576,17 @@ export default function ValuationPage() {
                     </span>
                   </div>
 
-                  {/* 1. Google Map Container */}
-                  <div ref={mapContainerRef} id="result-map-container" className="h-80 rounded-xl overflow-hidden border border-white/5 relative z-0 bg-slate-900 flex items-center justify-center">
-                    {!isGoogleLoaded && (
-                      <div className="text-slate-500 text-xs flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Google Map...
-                      </div>
-                    )}
-                  </div>
+                  {/* Shared Google Map Component */}
+                  <GooglePropertyMap
+                    latitude={result?.propertyCoordinates?.latitude ?? form.latitude}
+                    longitude={result?.propertyCoordinates?.longitude ?? form.longitude}
+                    places={filteredAmenities}
+                    height="h-80"
+                    title="Target Location"
+                    subTitle={`${form.locality}, ${form.city}`}
+                  />
 
-                  {/* 2. Dynamic Legend */}
+                  {/* Dynamic Legend */}
                   <div className="flex flex-wrap gap-3 text-xs text-slate-400 pt-1">
                     <span className="flex items-center gap-1 font-semibold text-violet-300">
                       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} /> Target Property
@@ -833,7 +598,7 @@ export default function ValuationPage() {
                     ))}
                   </div>
 
-                  {/* 3. Compact Category Filter Tabs */}
+                  {/* Compact Category Filter Tabs */}
                   {availableFilterTabs.length > 1 && (
                     <div className="flex flex-wrap gap-1 bg-slate-950/80 p-1.5 rounded-xl border border-white/5">
                       {availableFilterTabs.map(grp => (
@@ -848,7 +613,7 @@ export default function ValuationPage() {
                     </div>
                   )}
 
-                  {/* 4. Integrated Nearby Amenities List */}
+                  {/* Integrated Nearby Amenities List */}
                   <div className="space-y-3 pt-2 border-t border-white/5">
                     <div className="flex justify-between items-center">
                       <h4 className="font-bold text-white text-sm">
@@ -956,16 +721,17 @@ export default function ValuationPage() {
                     </span>
                   </div>
 
-                  {/* 1. Google Map Container */}
-                  <div ref={mapContainerRef} id="result-map-container" className="h-80 rounded-xl overflow-hidden border border-white/5 relative z-0 bg-slate-900 flex items-center justify-center">
-                    {!isGoogleLoaded && (
-                      <div className="text-slate-500 text-xs flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Google Map...
-                      </div>
-                    )}
-                  </div>
+                  {/* Shared Google Map Component */}
+                  <GooglePropertyMap
+                    latitude={form.latitude}
+                    longitude={form.longitude}
+                    places={filteredAmenities}
+                    height="h-80"
+                    title="Target Location"
+                    subTitle={`${form.locality}, ${form.city}`}
+                  />
 
-                  {/* 2. Dynamic Legend */}
+                  {/* Dynamic Legend */}
                   <div className="flex flex-wrap gap-3 text-xs text-slate-400 pt-1">
                     <span className="flex items-center gap-1 font-semibold text-violet-300">
                       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} /> Target Location
@@ -977,7 +743,7 @@ export default function ValuationPage() {
                     ))}
                   </div>
 
-                  {/* 3. Compact Category Filter Tabs */}
+                  {/* Compact Category Filter Tabs */}
                   {availableFilterTabs.length > 1 && (
                     <div className="flex flex-wrap gap-1 bg-slate-950/80 p-1.5 rounded-xl border border-white/5">
                       {availableFilterTabs.map(grp => (
@@ -992,7 +758,7 @@ export default function ValuationPage() {
                     </div>
                   )}
 
-                  {/* 4. Integrated Nearby Amenities List */}
+                  {/* Integrated Nearby Amenities List */}
                   <div className="space-y-3 pt-2 border-t border-white/5">
                     <div className="flex justify-between items-center">
                       <h4 className="font-bold text-white text-sm">

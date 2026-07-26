@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   BedDouble, Bath, Maximize, Car, TrendingUp, ShieldAlert, MapPin,
   Hospital, School, ShoppingBag, Train, TreePine, Star, ArrowLeft,
-  ExternalLink, Compass, ShieldCheck, CheckCircle2, Loader2, Filter
+  ExternalLink, Compass, ShieldCheck, CheckCircle2, Loader2, Filter, Building
 } from 'lucide-react';
-import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
+import GooglePropertyMap from '../components/GooglePropertyMap';
 
 const AMENITY_COLORS = {
   'Target Property': '#8b5cf6',
@@ -18,32 +18,16 @@ const AMENITY_COLORS = {
   Park: '#10b981', Bank: '#06b6d4', Restaurant: '#ec4899', Gym: '#a855f7'
 };
 
-const MAP_DARK_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#1f2937' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#9ca3af' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#111827' }] },
-  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-];
-
 export default function PropertyDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const clientApiKey = getGoogleMapsApiKey();
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [mapsError, setMapsError] = useState('');
-  const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
   const [galleryIdx, setGalleryIdx] = useState(0);
   const [selectedGroup, setSelectedGroup] = useState('All');
 
-  const mapContainerRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef = useRef([]);
-
-  // ─── Fetch Property Details ───────────────────────────────────────────────
+  // Fetch Property Details
   useEffect(() => {
     axios.get(`/api/properties/${id}`)
       .then(res => {
@@ -55,142 +39,6 @@ export default function PropertyDetails() {
         setLoading(false);
       });
   }, [id]);
-
-  // ─── Load Google Maps JS API Safely ──────────────────────────────────────────────
-  useEffect(() => {
-    loadGoogleMapsScript()
-      .then(() => {
-        setIsGoogleLoaded(true);
-        setMapsError('');
-      })
-      .catch(err => {
-        setIsGoogleLoaded(false);
-        setMapsError(err.message || 'Google Maps failed to load.');
-      });
-  }, []);
-
-  // ─── Render Google Map & Markers ──────────────────────────────────────────
-  const renderMap = useCallback(() => {
-    if (!data || !window.google || !mapContainerRef.current) return;
-    const p = data.property;
-    const places = data.nearby_google_places || [];
-
-    const rawLat = p.resolvedLatitude || p.latitude;
-    const rawLng = p.resolvedLongitude || p.longitude;
-    const safeLat = Number.isFinite(Number(rawLat)) ? Number(rawLat) : 17.4485;
-    const safeLng = Number.isFinite(Number(rawLng)) ? Number(rawLng) : 78.3908;
-    const center = { lat: safeLat, lng: safeLng };
-
-    // Reset instance if detached from current DOM container
-    if (mapInstanceRef.current && mapInstanceRef.current.getDiv) {
-      try {
-        if (mapInstanceRef.current.getDiv() !== mapContainerRef.current) {
-          mapInstanceRef.current = null;
-        }
-      } catch (e) {
-        mapInstanceRef.current = null;
-      }
-    }
-
-    if (!mapInstanceRef.current) {
-      mapInstanceRef.current = new window.google.maps.Map(mapContainerRef.current, {
-        center,
-        zoom: 14,
-        styles: MAP_DARK_STYLE,
-        zoomControl: true,
-        fullscreenControl: true,
-      });
-    }
-
-    const map = mapInstanceRef.current;
-    map.setCenter(center);
-
-    // Clear previous markers
-    if (Array.isArray(markersRef.current)) {
-      markersRef.current.forEach(m => m && m.setMap && m.setMap(null));
-    }
-    markersRef.current = [];
-
-    const bounds = new window.google.maps.LatLngBounds();
-    bounds.extend(center);
-
-    // 2. Target Property Marker (Distinct Purple Marker)
-    const targetMarker = new window.google.maps.Marker({
-      position: center,
-      map,
-      title: p.property_name || `${p.locality} ${p.property_type}`,
-      icon: {
-        path: window.google.maps.SymbolPath.CIRCLE,
-        scale: 10,
-        fillColor: '#8b5cf6',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 3,
-      },
-      zIndex: 999
-    });
-
-    const targetIw = new window.google.maps.InfoWindow({
-      content: `
-        <div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:220px;">
-          <strong style="font-size:14px;color:#6d28d9;">${p.property_name || 'Property'}</strong><br/>
-          <span style="font-size:12px;color:#475569;">${p.locality}, ${p.city}</span><br/>
-          <strong style="font-size:13px;color:#059669;">₹${new Intl.NumberFormat('en-IN').format(p.price_inr || 0)}</strong>
-        </div>
-      `
-    });
-    targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
-    markersRef.current.push(targetMarker);
-
-    // 3. Nearby Google Places Markers
-    places.forEach(place => {
-      if (!place || !Number.isFinite(Number(place.latitude)) || !Number.isFinite(Number(place.longitude))) return;
-      const pos = { lat: Number(place.latitude), lng: Number(place.longitude) };
-      bounds.extend(pos);
-      const color = AMENITY_COLORS[place.category] || '#3b82f6';
-
-      const marker = new window.google.maps.Marker({
-        position: pos,
-        map,
-        title: place.name || 'Place',
-        icon: {
-          path: window.google.maps.SymbolPath.CIRCLE,
-          scale: 6,
-          fillColor: color,
-          fillOpacity: 0.9,
-          strokeColor: '#ffffff',
-          strokeWeight: 1.5,
-        }
-      });
-
-      const iw = new window.google.maps.InfoWindow({
-        content: `
-          <div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:220px;">
-            <strong style="font-size:13px;color:#1e293b;">${place.name || 'Place'}</strong><br/>
-            <span style="font-size:11px;color:#64748b;">${place.category || ''} · <strong>${place.distance_km || 0} km</strong></span><br/>
-            ${place.rating ? `<span style="font-size:11px;color:#d97706;">⭐ ${place.rating}</span><br/>` : ''}
-            <span style="font-size:11px;color:#475569;">${place.address || ''}</span>
-          </div>
-        `
-      });
-
-      marker.addListener('click', () => iw.open(map, marker));
-      markersRef.current.push(marker);
-    });
-
-    if (places.length > 0) {
-      map.fitBounds(bounds);
-    } else {
-      map.setCenter(center);
-      map.setZoom(14);
-    }
-  }, [data]);
-
-  useEffect(() => {
-    if (isGoogleLoaded && data) {
-      renderMap();
-    }
-  }, [isGoogleLoaded, data, renderMap]);
 
   if (loading) return (
     <div className="min-h-screen bg-[#0b0f19] flex items-center justify-center text-slate-400 gap-2">
@@ -241,11 +89,11 @@ export default function PropertyDetails() {
   return (
     <div className="min-h-screen bg-[#0b0f19] text-white px-4 py-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Navigation & Header */}
-        <div className="flex items-center justify-between">
+        {/* Navigation & Status Header */}
+        <div className="flex justify-between items-center">
           <button
             onClick={() => navigate(-1)}
-            className="flex items-center gap-2 text-xs text-slate-400 hover:text-white transition bg-slate-900/80 px-3.5 py-2 rounded-xl border border-white/5"
+            className="flex items-center gap-2 text-xs font-semibold text-slate-400 hover:text-white transition"
           >
             <ArrowLeft className="h-4 w-4" /> Back to Listings
           </button>
@@ -429,21 +277,17 @@ export default function PropertyDetails() {
                 </span>
               </div>
 
-              {/* Google Map Container */}
-              <div
-                ref={mapContainerRef}
-                id="google-map-details-container"
-                className="h-80 rounded-xl overflow-hidden border border-white/5 relative bg-slate-900 flex items-center justify-center"
-              >
-                {!isGoogleLoaded && (
-                  <div className="text-slate-500 text-xs flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Google Map...
-                  </div>
-                )}
-              </div>
-              {mapsError && <p className="text-[11px] text-amber-400 font-medium">{mapsError}</p>}
+              {/* Shared Single-Instance Google Map Component */}
+              <GooglePropertyMap
+                latitude={p.resolvedLatitude || p.latitude}
+                longitude={p.resolvedLongitude || p.longitude}
+                places={filteredPlaces}
+                height="h-80"
+                title={p.property_name}
+                subTitle={`${p.locality}, ${p.city}`}
+              />
 
-              {/* Category Filter Tabs */}
+              {/* Dynamic Group Filter Tabs */}
               {availableGroups.length > 1 && (
                 <div className="flex flex-wrap gap-1 bg-slate-950/80 p-1.5 rounded-xl border border-white/5">
                   {availableGroups.map(grp => (
@@ -469,24 +313,24 @@ export default function PropertyDetails() {
 
                 {filteredPlaces.length === 0 ? (
                   <div className="text-center text-slate-500 py-6 text-xs bg-slate-950/40 rounded-xl border border-white/5">
-                    No nearby places returned for this category.
+                    No nearby places returned for this category filter.
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    {filteredPlaces.map((place, i) => (
-                      <div key={place.place_id || i} className="p-3 bg-slate-950/60 rounded-xl flex items-center justify-between gap-4 text-xs border border-white/5 hover:border-violet-500/20 transition">
+                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                    {filteredPlaces.map((pl, i) => (
+                      <div key={pl?.place_id || i} className="p-3 bg-slate-950/60 rounded-xl flex items-center justify-between gap-4 text-xs border border-white/5 hover:border-violet-500/20 transition">
                         <div className="flex items-start gap-2.5 min-w-0">
-                          <span className="w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: AMENITY_COLORS[place.category] || '#3b82f6' }} />
+                          <span className="w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0" style={{ backgroundColor: AMENITY_COLORS[pl.category] || '#3b82f6' }} />
                           <div className="min-w-0">
-                            <p className="font-bold text-white text-sm truncate">{place.name || 'Place'}</p>
-                            <p className="text-[11px] text-slate-400 truncate mt-0.5">{place.category} {place.address ? `· ${place.address}` : ''}</p>
-                            {place.rating > 0 && <span className="text-[10px] text-amber-400 font-semibold inline-block mt-0.5">⭐ {place.rating} ({place.user_ratings_total})</span>}
+                            <p className="font-bold text-white text-sm truncate">{pl?.name || 'Place'}</p>
+                            <p className="text-[11px] text-slate-400 truncate mt-0.5">{pl?.category || ''} {pl?.address ? `· ${pl.address}` : ''}</p>
+                            {pl?.rating > 0 && <span className="text-[10px] text-amber-400 font-semibold inline-block mt-0.5">⭐ {pl.rating}</span>}
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <span className="font-mono font-extrabold text-violet-400 text-sm">{place.distance_km} km</span>
-                          {place.google_maps_uri && (
-                            <a href={place.google_maps_uri} target="_blank" rel="noreferrer" className="block text-[10px] text-slate-500 hover:text-violet-300 mt-0.5">
+                          <span className="font-mono font-extrabold text-violet-400 text-sm">{pl?.distance_km || 0} km</span>
+                          {pl?.google_maps_uri && (
+                            <a href={pl.google_maps_uri} target="_blank" rel="noreferrer" className="block text-[10px] text-slate-500 hover:text-violet-300 mt-0.5">
                               Google Maps ↗
                             </a>
                           )}
