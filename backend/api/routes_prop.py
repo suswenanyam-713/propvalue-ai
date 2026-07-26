@@ -596,9 +596,7 @@ def autocomplete_address_proxy(input: str, db: Session = Depends(get_db)):
     import requests
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
     if not api_key:
-        presets = ["Madhapur, Hyderabad", "Miyapur, Hyderabad", "Velachery, Chennai", "Bandra, Mumbai", "Baner, Pune"]
-        matches = [p for p in presets if input.lower() in p.lower()]
-        return {"predictions": [{"description": m, "place_id": f"preset_{m.lower().split(',')[0].strip()}"} for m in (matches or presets)]}
+        return {"predictions": [], "status": "ZERO_RESULTS"}
     referer_header = os.getenv("APP_REFERER", "https://propvalue-ai-i2hd.vercel.app/").strip()
     headers = {"Referer": referer_header}
     url = f"https://maps.googleapis.com/maps/api/place/autocomplete/json?input={urllib.parse.quote(input)}&key={api_key}&components=country:in"

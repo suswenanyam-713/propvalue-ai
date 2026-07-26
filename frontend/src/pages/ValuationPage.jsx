@@ -70,12 +70,15 @@ export default function ValuationPage() {
   const [forecastLoading, setForecastLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Autocomplete state
+  // 100% Live Google Places Autocomplete state
   const [suggestions, setSuggestions] = useState([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const [isSearchingAc, setIsSearchingAc] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [acError, setAcError] = useState('');
+  
   const acRef = useRef(null);
+  const acServiceRef = useRef(null);
   const sessionTokenRef = useRef(null);
 
   // Live Nearby Google Places state
@@ -104,77 +107,81 @@ export default function ValuationPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Fetch Fallback Autocomplete via proxy or presets
-  const fetchFallbackAutocomplete = useCallback(async (query) => {
-    try {
-      const res = await axios.get('/api/location/search', { params: { input: query } });
-      const preds = res.data?.predictions || [];
-      if (preds.length > 0) {
-        setSuggestions(preds);
-        setShowDropdown(true);
-      } else {
-        const PRESETS_LIST = [
-          { description: 'Miyapur, Hyderabad, Telangana, India', place_id: 'preset_miyapur' },
-          { description: 'Gachibowli, Hyderabad, Telangana, India', place_id: 'preset_gachibowli' },
-          { description: 'Madhapur, Hyderabad, Telangana, India', place_id: 'preset_madhapur' },
-          { description: 'Velachery, Chennai, Tamil Nadu, India', place_id: 'preset_velachery' },
-          { description: 'Bandra, Mumbai, Maharashtra, India', place_id: 'preset_bandra' },
-          { description: 'Baner, Pune, Maharashtra, India', place_id: 'preset_baner' },
-        ];
-        const matches = PRESETS_LIST.filter(p => p.description.toLowerCase().includes(query.toLowerCase()));
-        setSuggestions(matches.length > 0 ? matches : PRESETS_LIST);
-        setShowDropdown(true);
+  // Helper to initialize or retrieve client-side AutocompleteService
+  const getAutocompleteService = useCallback(() => {
+    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteService) {
+      if (!acServiceRef.current) {
+        acServiceRef.current = new window.google.maps.places.AutocompleteService();
       }
-    } catch (err) {
-      console.warn('Fallback autocomplete error:', err);
-    } finally {
-      setIsSearchingAc(false);
+      return acServiceRef.current;
     }
+    return null;
   }, []);
 
-  // Client-Side Authorized Autocomplete Fetcher
+  // Helper to manage Autocomplete Session Token
+  const getSessionToken = useCallback(() => {
+    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteSessionToken) {
+      if (!sessionTokenRef.current) {
+        sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+      }
+      return sessionTokenRef.current;
+    }
+    return null;
+  }, []);
+
+  // Fetch Live Google Places Autocomplete Predictions strictly from Google Places API
   const fetchAutocomplete = useCallback((query) => {
     if (!query || query.trim().length < 2) {
       setSuggestions([]);
       setShowDropdown(false);
+      setSelectedIndex(-1);
       return;
     }
     setIsSearchingAc(true);
     setAcError('');
 
-    // Method 1: Client-Side Google Maps JS API AutocompleteService (Uses website HTTP Referrer)
-    if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteService) {
+    const service = getAutocompleteService();
+    if (service) {
       try {
-        if (!sessionTokenRef.current && window.google.maps.places.AutocompleteSessionToken) {
-          sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+        const req = {
+          input: query.trim(),
+          componentRestrictions: { country: 'in' },
+        };
+        const token = getSessionToken();
+        if (token) {
+          req.sessionToken = token;
         }
 
-        const service = new window.google.maps.places.AutocompleteService();
-        service.getPlacePredictions(
-          {
-            input: query,
-            componentRestrictions: { country: 'in' },
-            sessionToken: sessionTokenRef.current,
-          },
-          (predictions, status) => {
-            setIsSearchingAc(false);
-            if (status === window.google.maps.places.PlacesServiceStatus.OK && Array.isArray(predictions) && predictions.length > 0) {
-              setSuggestions(predictions);
-              setShowDropdown(true);
-            } else {
-              fetchFallbackAutocomplete(query);
-            }
+        service.getPlacePredictions(req, (predictions, status) => {
+          setIsSearchingAc(false);
+          setSelectedIndex(-1);
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && Array.isArray(predictions) && predictions.length > 0) {
+            setSuggestions(predictions);
+            setShowDropdown(true);
+            setAcError('');
+          } else if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+            setSuggestions([]);
+            setShowDropdown(false);
+            setAcError('No Google location suggestions found.');
+          } else {
+            console.warn('Google Places Autocomplete status:', status);
+            setSuggestions([]);
+            setShowDropdown(false);
+            setAcError('Unable to load Google location suggestions.');
           }
-        );
+        });
         return;
       } catch (err) {
-        console.warn('Client AutocompleteService error, using fallback:', err);
+        console.warn('AutocompleteService prediction exception:', err);
       }
     }
 
-    // Method 2: Fallback Proxy/Presets
-    fetchFallbackAutocomplete(query);
-  }, [fetchFallbackAutocomplete]);
+    // If Google Places JS API is not loaded yet
+    setIsSearchingAc(false);
+    setSuggestions([]);
+    setShowDropdown(false);
+    setAcError('Google Places JS API is loading...');
+  }, [getAutocompleteService, getSessionToken]);
 
   const debouncedFetchAc = useDebounce(fetchAutocomplete, 300);
 
@@ -201,91 +208,24 @@ export default function ValuationPage() {
     }
   }, []);
 
-  // REST Details Fallback Helper
-  const fetchPlacesDetailsREST = useCallback(async (placeId, text) => {
-    try {
-      const res = await fetch(
-        `https://places.googleapis.com/v1/places/${placeId}`,
-        {
-          headers: {
-            'X-Goog-Api-Key': clientApiKey,
-            'X-Goog-FieldMask': 'location,formattedAddress,addressComponents,displayName',
-          },
-        }
-      );
-      const place = await res.json();
-      const lat = place?.location?.latitude;
-      const lng = place?.location?.longitude;
-      if (!lat || !lng) return;
-
-      let locality = '', city = '';
-      for (const comp of (place.addressComponents || [])) {
-        const types = comp.types || [];
-        if (types.includes('sublocality_level_1') || types.includes('sublocality')) {
-          if (!locality) locality = comp.longText;
-        } else if (types.includes('locality')) {
-          if (!locality) locality = comp.longText;
-          if (!city) city = comp.longText;
-        } else if (types.includes('administrative_area_level_2')) {
-          if (!city) city = comp.longText;
-        }
-      }
-
-      const formattedAddress = place.formattedAddress || text;
-      setAddressInput(formattedAddress);
-
-      const CITY_MAP = {
-        Hyderabad: 'Hyderabad', Chennai: 'Chennai', Pune: 'Pune',
-        Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
-      };
-
-      const selectedCity = CITY_MAP[city] || form.city;
-      const selectedLocality = locality || form.locality;
-
-      setForm(prev => ({
-        ...prev,
-        latitude: lat,
-        longitude: lng,
-        locality: selectedLocality,
-        city: selectedCity,
-      }));
-
-      fetchLiveNearbyAmenities(lat, lng, selectedCity, selectedLocality);
-    } catch (err) {
-      console.warn('Places details REST error:', err);
-    }
-  }, [clientApiKey, form.city, form.locality, fetchLiveNearbyAmenities]);
-
   // Handle Autocomplete Item Selection
-  const handleSelectSuggestion = useCallback(async (placeId, text) => {
+  const handleSelectSuggestion = useCallback((prediction) => {
+    if (!prediction) return;
+    const placeId = prediction.place_id;
+    const description = prediction.description || prediction.structured_formatting?.main_text || '';
+
     setShowDropdown(false);
     setAcError('');
+    setSelectedIndex(-1);
 
-    if (!placeId) return;
-
-    // Reset Session Token for next autocomplete search session
+    // Reset Session Token after place selection
     if (window.google && window.google.maps && window.google.maps.places && window.google.maps.places.AutocompleteSessionToken) {
       sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
     }
 
-    if (placeId.startsWith('preset_')) {
-      const locKey = placeId.replace('preset_', '').trim().toLowerCase();
-      const PRESETS = {
-        madhapur: { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' },
-        miyapur: { lat: 17.4965, lng: 78.4014, city: 'Hyderabad', locality: 'Miyapur' },
-        gachibowli: { lat: 17.4401, lng: 78.3489, city: 'Hyderabad', locality: 'Gachibowli' },
-        velachery: { lat: 12.9796, lng: 80.2201, city: 'Chennai', locality: 'Velachery' },
-        bandra: { lat: 19.0596, lng: 72.8295, city: 'Mumbai', locality: 'Bandra' },
-        baner: { lat: 18.5590, lng: 73.7868, city: 'Pune', locality: 'Baner' },
-      };
-      const p = PRESETS[locKey] || { lat: 17.4485, lng: 78.3908, city: 'Hyderabad', locality: 'Madhapur' };
-      setAddressInput(text);
-      setForm(prev => ({ ...prev, latitude: p.lat, longitude: p.lng, city: p.city, locality: p.locality }));
-      fetchLiveNearbyAmenities(p.lat, p.lng, p.city, p.locality);
-      return;
-    }
+    if (!placeId) return;
 
-    // Client Geocoder in Browser JS (Authorized for HTTP Referrer)
+    // Use Geocoder in Browser JS to resolve coordinates & address components
     if (window.google && window.google.maps && window.google.maps.Geocoder) {
       try {
         const geocoder = new window.google.maps.Geocoder();
@@ -294,11 +234,11 @@ export default function ValuationPage() {
             const place = results[0];
             const lat = place.geometry.location.lat();
             const lng = place.geometry.location.lng();
-            
+
             let locality = '', city = '';
             for (const comp of (place.address_components || [])) {
               const types = comp.types || [];
-              if (types.includes('sublocality_level_1') || types.includes('sublocality')) {
+              if (types.includes('sublocality_level_1') || types.includes('sublocality') || types.includes('neighborhood')) {
                 if (!locality) locality = comp.long_name;
               } else if (types.includes('locality')) {
                 if (!locality) locality = comp.long_name;
@@ -313,10 +253,12 @@ export default function ValuationPage() {
               Mumbai: 'Mumbai', Bengaluru: 'Bengaluru', Bangalore: 'Bengaluru',
             };
 
-            const selectedCity = CITY_MAP[city] || form.city;
-            const selectedLocality = locality || text.split(',')[0] || form.locality;
+            const selectedCity = CITY_MAP[city] || city || form.city;
+            const selectedLocality = locality || description.split(',')[0] || form.locality;
 
-            setAddressInput(place.formatted_address || text);
+            const formattedAddress = place.formatted_address || description;
+            setAddressInput(formattedAddress);
+
             setForm(prev => ({
               ...prev,
               latitude: lat,
@@ -325,20 +267,38 @@ export default function ValuationPage() {
               city: selectedCity,
             }));
 
-            // Refresh live nearby amenities with new coordinates!
+            // Refresh live nearby amenities with exact Google Place coordinates!
             fetchLiveNearbyAmenities(lat, lng, selectedCity, selectedLocality);
-            return;
+          } else {
+            console.warn('Geocoder failed to resolve placeId:', placeId, status);
+            setAcError('Could not resolve selected location coordinates.');
           }
-          fetchPlacesDetailsREST(placeId, text);
         });
-        return;
       } catch (err) {
-        console.warn('Geocoder place resolution exception:', err);
+        console.warn('Geocoder exception:', err);
       }
     }
+  }, [form.city, form.locality, fetchLiveNearbyAmenities]);
 
-    fetchPlacesDetailsREST(placeId, text);
-  }, [form.city, form.locality, fetchLiveNearbyAmenities, fetchPlacesDetailsREST]);
+  // Keyboard navigation for dropdown (ArrowUp, ArrowDown, Enter, Escape)
+  const handleKeyDown = (e) => {
+    if (!showDropdown || suggestions.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev < suggestions.length - 1 ? prev + 1 : 0));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(prev => (prev > 0 ? prev - 1 : suggestions.length - 1));
+    } else if (e.key === 'Enter') {
+      if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
+        e.preventDefault();
+        handleSelectSuggestion(suggestions[selectedIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setShowDropdown(false);
+    }
+  };
 
   // ─── Safely Render Preview Map ─────────────────────────────────────────────
   const renderPreviewMap = useCallback((lat, lng, placesList = []) => {
@@ -641,22 +601,23 @@ export default function ValuationPage() {
                     type="text"
                     value={addressInput}
                     onChange={handleAddressInputChange}
+                    onKeyDown={handleKeyDown}
                     onFocus={() => { if (suggestions.length > 0) setShowDropdown(true); }}
-                    placeholder="e.g. Miyapur, Hyderabad or Gachibowli..."
+                    placeholder="e.g. Financial District Hyderabad, Connaught Place, Miyapur..."
                     className="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition pl-9"
                   />
                   <Search className="h-4 w-4 text-slate-400 absolute left-3 top-3" />
                   {isSearchingAc && <Loader2 className="h-4 w-4 animate-spin text-violet-400 absolute right-3 top-3" />}
                 </div>
 
-                {/* Autocomplete Suggestions Dropdown */}
+                {/* Live Google Autocomplete Suggestions Dropdown */}
                 {showDropdown && suggestions.length > 0 && (
                   <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-violet-500/30 rounded-xl shadow-2xl z-[100000] max-h-60 overflow-y-auto">
                     {suggestions.map((item, idx) => (
                       <div
                         key={item.place_id || idx}
-                        onClick={() => handleSelectSuggestion(item.place_id, item.description || item.structured_formatting?.main_text)}
-                        className="px-4 py-2.5 hover:bg-violet-600/30 cursor-pointer text-xs text-slate-200 flex items-center gap-2.5 border-b border-white/5 last:border-none transition"
+                        onClick={() => handleSelectSuggestion(item)}
+                        className={`px-4 py-2.5 cursor-pointer text-xs flex items-center gap-2.5 border-b border-white/5 last:border-none transition ${selectedIndex === idx ? 'bg-violet-600/40 text-white' : 'hover:bg-violet-600/20 text-slate-200'}`}
                       >
                         <MapPin className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
                         <div className="min-w-0 flex-1">
