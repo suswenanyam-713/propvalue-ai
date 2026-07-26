@@ -64,9 +64,11 @@ def seed_db(db: Session):
     else:
         print("Users table already seeded.")
 
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
     # 2. Seed Properties
     if db.query(Property).count() == 0:
-        csv_path = "Dataset/Property_Valuation_10000.csv"
+        csv_path = os.path.join(BASE_DIR, "Dataset", "Property_Valuation_10000.csv")
         if os.path.exists(csv_path):
             print(f"Seeding properties from {csv_path}...")
             df = pd.read_csv(csv_path)
@@ -113,7 +115,7 @@ def seed_db(db: Session):
 
     # 3. Seed Historical Prices
     if db.query(HistoricalPrice).count() == 0:
-        csv_path = "Dataset/Historical_Prices_10000.csv"
+        csv_path = os.path.join(BASE_DIR, "Dataset", "Historical_Prices_10000.csv")
         if os.path.exists(csv_path):
             print(f"Seeding historical prices from {csv_path}...")
             df = pd.read_csv(csv_path)
@@ -144,7 +146,7 @@ def seed_db(db: Session):
 
     # 4. Seed Nearby Places
     if db.query(NearbyPlace).count() == 0:
-        csv_path = "Dataset/Nearby_Places_10000.csv"
+        csv_path = os.path.join(BASE_DIR, "Dataset", "Nearby_Places_10000.csv")
         if os.path.exists(csv_path):
             print(f"Seeding nearby places from {csv_path}...")
             df = pd.read_csv(csv_path)
@@ -177,7 +179,7 @@ def seed_db(db: Session):
 
     # 5. Seed Live Market Data
     if db.query(MarketData).count() == 0:
-        csv_path = "Dataset/Live_Market_10000.csv"
+        csv_path = os.path.join(BASE_DIR, "Dataset", "Live_Market_10000.csv")
         if os.path.exists(csv_path):
             print(f"Seeding live market listings from {csv_path}...")
             df = pd.read_csv(csv_path)

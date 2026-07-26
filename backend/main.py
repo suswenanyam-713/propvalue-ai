@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from backend.api import routes_auth, routes_val, routes_prop, routes_chat, routes_admin
+from backend.database.session import Base, engine, SessionLocal
+from backend.database.seed import seed_db
+from backend.database.models import Property
 
 app = FastAPI(
     title="AI-Powered Property Valuation & Investment Intelligence API",
@@ -22,6 +25,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_event():
+    try:
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        try:
+            if db.query(Property).count() == 0:
+                print("Database empty on startup. Auto-seeding 10,000 properties...")
+                seed_db(db)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"Startup DB init check: {e}")
 
 # Register all API routes FIRST
 app.include_router(routes_auth.router)

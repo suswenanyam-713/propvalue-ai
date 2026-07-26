@@ -3,4 +3,3 @@ frontend/dist
 node_modules
 .git
 .agents
-*.db

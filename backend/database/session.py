@@ -7,18 +7,24 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     db_filename = "real_estate.db"
-    orig_db = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), db_filename)
-    tmp_db = os.path.join("/tmp", db_filename)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    orig_db = os.path.join(BASE_DIR, db_filename)
+    tmp_dir = "/tmp"
+    tmp_db = os.path.join(tmp_dir, db_filename)
 
-    if os.path.exists("/tmp") and os.path.exists(orig_db) and not os.path.exists(tmp_db):
-        try:
-            shutil.copy2(orig_db, tmp_db)
+    if os.path.exists(tmp_dir):
+        if os.path.exists(orig_db) and not os.path.exists(tmp_db):
+            try:
+                shutil.copy2(orig_db, tmp_db)
+            except Exception as e:
+                print(f"Could not copy SQLite DB to /tmp: {e}")
+        
+        if os.path.exists(tmp_db):
             DATABASE_URL = f"sqlite:///{tmp_db}"
-        except Exception as e:
-            print(f"Could not copy SQLite DB to /tmp: {e}")
+        elif os.path.exists(orig_db):
             DATABASE_URL = f"sqlite:///{orig_db}"
-    elif os.path.exists(tmp_db):
-        DATABASE_URL = f"sqlite:///{tmp_db}"
+        else:
+            DATABASE_URL = f"sqlite:///{tmp_db}"
     else:
         DATABASE_URL = f"sqlite:///{orig_db}"
 
