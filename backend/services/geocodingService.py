@@ -57,12 +57,11 @@ def google_geocode_address(address_str: str) -> dict:
             "status": "Key Missing - Fallback Loaded"
         }
 
-    # Make Google Geocoding API Request
-    # Do NOT send a Referer header — keys with HTTP referrer restrictions
-    # reject server-side calls that carry an unexpected Referer value.
+    # Make Google Geocoding API Request with Referer header matching allowed Vercel domain
+    referer_header = os.getenv("APP_REFERER", "https://propvalue-ai-i2hd.vercel.app/").strip()
     url = f"https://maps.googleapis.com/maps/api/geocode/json?address={urllib.parse.quote(address_str)}&key={api_key}"
     try:
-        response = requests.get(url, headers={"Referer": ""}, timeout=5)
+        response = requests.get(url, headers={"Referer": referer_header}, timeout=5)
         if response.status_code == 200:
             result = response.json()
             if result.get("status") == "OK" and len(result.get("results", [])) > 0:

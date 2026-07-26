@@ -86,14 +86,15 @@ def fetch_google_nearby_places(lat: float, lon: float, radius_meters: float = 30
             return cached_result
 
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip() or "AIzaSyD574mnVYIvct8zVxItegPKsq5wmx-kOcQ"
+    referer_header = os.getenv("APP_REFERER", "https://propvalue-ai-i2hd.vercel.app/").strip()
 
     url = "https://places.googleapis.com/v1/places:searchNearby"
-    # IMPORTANT: Server-side REST calls must NOT pass a fake localhost Referer header,
-    # as keys configured with website HTTP referrer restrictions will return 403 / REQUEST_DENIED.
+    # Set Referer matching Vercel domain to comply with Google Cloud Console HTTP Referrer Restrictions
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.rating,places.userRatingCount,places.googleMapsUri,places.businessStatus"
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.types,places.rating,places.userRatingCount,places.googleMapsUri,places.businessStatus",
+        "Referer": referer_header
     }
 
     payload = {

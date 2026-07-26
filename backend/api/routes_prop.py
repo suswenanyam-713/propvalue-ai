@@ -599,10 +599,8 @@ def autocomplete_address_proxy(input: str, db: Session = Depends(get_db)):
         presets = ["Madhapur, Hyderabad", "Miyapur, Hyderabad", "Velachery, Chennai", "Bandra, Mumbai", "Baner, Pune"]
         matches = [p for p in presets if input.lower() in p.lower()]
         return {"predictions": [{"description": m, "place_id": f"preset_{m.lower().split(',')[0].strip()}"} for m in (matches or presets)]}
-    # IMPORTANT: Do NOT send Referer header. Keys with HTTP referrer restrictions
-    # will return REQUEST_DENIED if a Referer header is present but doesn't match
-    # the allowed list. Server-side calls should have no Referer.
-    headers = {"Referer": ""}  # explicitly clear any inherited Referer
+    referer_header = os.getenv("APP_REFERER", "https://propvalue-ai-i2hd.vercel.app/").strip()
+    headers = {"Referer": referer_header}
     url = f"https://maps.googleapis.com/maps/api/place/autocomplete/json?input={urllib.parse.quote(input)}&key={api_key}&components=country:in"
     try:
         res = requests.get(url, headers=headers, timeout=5)
