@@ -306,28 +306,73 @@ export default function PropertyDetails() {
               )}
             </div>
 
-            {/* Quick Specs Grid */}
+            {/* Quick Specs Grid (Dynamic by Property Type) */}
             <div className="glass-panel p-6 rounded-2xl border border-white/10 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
               <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
                 <Maximize className="h-5 w-5 text-violet-400 mx-auto mb-1" />
-                <p className="text-[11px] text-slate-400">Area</p>
+                <p className="text-[11px] text-slate-400">
+                  {p.property_type === 'Plot' || p.property_type === 'Land' ? 'Plot Area' :
+                   p.property_type === 'Commercial' ? 'Commercial Area' :
+                   p.property_type === 'Villa' ? 'Built-up Area' : 'Area'}
+                </p>
                 <p className="text-sm font-bold text-white">{p.area_sqft} sq.ft</p>
               </div>
-              <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
-                <BedDouble className="h-5 w-5 text-violet-400 mx-auto mb-1" />
-                <p className="text-[11px] text-slate-400">Bedrooms</p>
-                <p className="text-sm font-bold text-white">{p.bedrooms} BHK</p>
-              </div>
-              <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
-                <Bath className="h-5 w-5 text-violet-400 mx-auto mb-1" />
-                <p className="text-[11px] text-slate-400">Bathrooms</p>
-                <p className="text-sm font-bold text-white">{p.bathrooms}</p>
-              </div>
-              <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
-                <Car className="h-5 w-5 text-violet-400 mx-auto mb-1" />
-                <p className="text-[11px] text-slate-400">Parking</p>
-                <p className="text-sm font-bold text-white">{p.parking}</p>
-              </div>
+
+              {p.property_type === 'Plot' || p.property_type === 'Land' ? (
+                <>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <Compass className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Locality</p>
+                    <p className="text-sm font-bold text-white truncate">{p.locality}</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Land Status</p>
+                    <p className="text-sm font-bold text-emerald-400">Verified Plot</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <MapPin className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Price / sq.ft</p>
+                    <p className="text-sm font-bold text-white">₹{Math.round(p.price_inr / p.area_sqft).toLocaleString('en-IN')}</p>
+                  </div>
+                </>
+              ) : p.property_type === 'Commercial' ? (
+                <>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <Compass className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Floor Level</p>
+                    <p className="text-sm font-bold text-white">Floor {p.floor || 1}</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <Car className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Parking</p>
+                    <p className="text-sm font-bold text-white">{p.parking || 'Yes'}</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <CheckCircle2 className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Furnishing</p>
+                    <p className="text-sm font-bold text-white">{p.furnishing || 'Fully'}</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <BedDouble className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Bedrooms</p>
+                    <p className="text-sm font-bold text-white">{p.bedrooms} BHK</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <Bath className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Bathrooms</p>
+                    <p className="text-sm font-bold text-white">{p.bathrooms}</p>
+                  </div>
+                  <div className="p-3 bg-slate-900/60 rounded-xl border border-white/5">
+                    <Car className="h-5 w-5 text-violet-400 mx-auto mb-1" />
+                    <p className="text-[11px] text-slate-400">Parking</p>
+                    <p className="text-sm font-bold text-white">{p.parking}</p>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Investment Intelligence & Risk Card */}

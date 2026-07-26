@@ -47,6 +47,10 @@ def execute_property_valuation(
     5. Feeds Location Score and ML outputs into the Valuation adjustments pipeline.
     6. Logs the geocoded record (if database is writable) and outputs the structured audit breakdown.
     """
+    from backend.services.locationResolutionService import resolve_property_location
+    from backend.services.googlePlacesService import fetch_google_nearby_places
+    from backend.services.locationScoringService import compute_location_score
+
     # Sanitize optional inputs for Plot/Commercial properties
     bedrooms = bedrooms if bedrooms is not None else 0
     bathrooms = bathrooms if bathrooms is not None else 0
@@ -55,9 +59,14 @@ def execute_property_valuation(
     parking = parking if parking else "No"
     furnishing = furnishing if furnishing else "Unfurnished"
 
-    loc_res = resolve_property_location(latitude, longitude, city, locality)
-    lat = loc_res["resolvedLatitude"]
-    lon = loc_res["resolvedLongitude"]
+    try:
+        loc_res = resolve_property_location(latitude, longitude, city, locality)
+        lat = loc_res.get("resolvedLatitude", latitude or 17.4485)
+        lon = loc_res.get("resolvedLongitude", longitude or 78.3908)
+    except Exception as loc_err:
+        print(f"[Location Resolution Fallback Warning]: {loc_err}")
+        lat = float(latitude) if latitude is not None else 17.4485
+        lon = float(longitude) if longitude is not None else 78.3908
 
     # 2. Fetch Google Places API (New) Nearby Search results
     places_res = fetch_google_nearby_places(lat, lon, radius_meters=3000.0)
