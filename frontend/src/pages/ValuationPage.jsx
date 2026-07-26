@@ -3,6 +3,7 @@ import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Brain, TrendingUp, ShieldAlert, IndianRupee, AlertCircle, Loader2, MapPin, Sparkles, Building, Compass, Calendar, Search, X, CheckCircle2, ExternalLink } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
 
 const CITIES = ['Chennai', 'Hyderabad', 'Pune', 'Mumbai', 'Bengaluru'];
 const LOCALITIES = {
@@ -45,8 +46,6 @@ const MAP_DARK_STYLE = [
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
 ];
 
-const GMAPS_CALLBACK = '__gmapsReady_propvalue_integrated';
-
 // Debounce helper
 function useDebounce(fn, delay) {
   const timer = useRef(null);
@@ -57,7 +56,7 @@ function useDebounce(fn, delay) {
 }
 
 export default function ValuationPage() {
-  const clientApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+  const clientApiKey = getGoogleMapsApiKey();
 
   const [form, setForm] = useState({
     city: 'Hyderabad', locality: 'Gachibowli', property_type: 'Apartment',
@@ -70,110 +69,76 @@ export default function ValuationPage() {
   const [loading, setLoading] = useState(false);
   const [forecastLoading, setForecastLoading] = useState(false);
   const [error, setError] = useState('');
-  const [mapsError, setMapsError] = useState('');
-  const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
 
-  // Custom autocomplete & live places state
+  // Autocomplete state
   const [suggestions, setSuggestions] = useState([]);
+  const [isSearchingAc, setIsSearchingAc] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [acError, setAcError] = useState('');
-  const [liveAmenities, setLiveAmenities] = useState([]);
-  const [loadingAmenities, setLoadingAmenities] = useState(false);
 
-  // Client-side category filter selection inside Location Audit
+  // Live Nearby Google Places state
+  const [nearbyAmenities, setNearbyAmenities] = useState([]);
+  const [loadingAmenities, setLoadingAmenities] = useState(false);
   const [selectedFilterGroup, setSelectedFilterGroup] = useState('All');
 
-  const mapContainerRef = useRef(null);
+  // Google Maps JS API State & Refs
+  const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
+  const [mapsError, setMapsError] = useState('');
   const previewMapRef = useRef(null);
+  const mapContainerRef = useRef(null);
   const previewMapInstanceRef = useRef(null);
+  const googleMapInstance = useRef(null);
   const previewMarkersRef = useRef([]);
   const resultMarkersRef = useRef([]);
-  const googleMapInstance = useRef(null);
-  const dropdownRef = useRef(null);
 
-  const formatPrice = (val) => {
-    if (val === undefined || val === null || isNaN(val)) return '₹0';
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
-  };
-
-  // ─── Close dropdown on outside click ──────────────────────────────────────
-  useEffect(() => {
-    const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  // ─── Fetch Google Places API (New) Autocomplete ────────────────────────────
-  const fetchSuggestions = useCallback(async (query) => {
-    if (!query || query.trim().length < 2) {
-      setSuggestions([]); setShowDropdown(false); return;
+  // Fetch Autocomplete via proxy route
+  const fetchAutocomplete = useCallback(async (query) => {
+    if (!query || query.length < 2) {
+      setSuggestions([]);
+      return;
     }
-    if (!clientApiKey) return;
-
-    setLoadingSuggestions(true);
+    setIsSearchingAc(true);
     setAcError('');
     try {
-      const res = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': clientApiKey,
-        },
-        body: JSON.stringify({
-          input: query.trim(),
-          includedRegionCodes: ['in'],
-          languageCode: 'en',
-        }),
-      });
-      const data = await res.json();
-      if (data?.suggestions) {
-        setSuggestions(data.suggestions);
-        setShowDropdown(true);
-      } else {
-        setSuggestions([]); setShowDropdown(false);
-      }
+      const res = await axios.get('/api/location/search', { params: { input: query } });
+      const preds = res.data?.predictions || [];
+      setSuggestions(preds);
+      setShowDropdown(true);
     } catch (err) {
       console.warn('Autocomplete fetch error:', err);
-      setSuggestions([]); setShowDropdown(false);
+      setAcError('Could not load suggestions');
     } finally {
-      setLoadingSuggestions(false);
+      setIsSearchingAc(false);
     }
-  }, [clientApiKey]);
+  }, []);
 
-  const debouncedFetch = useDebounce(fetchSuggestions, 280);
+  const debouncedFetchAc = useDebounce(fetchAutocomplete, 300);
 
-  // ─── Fetch Live Google Places Nearby Search ────────────────────────────────
-  const fetchLiveNearbyAmenities = useCallback(async (lat, lng, city, locality) => {
+  const handleAddressInputChange = (e) => {
+    const val = e.target.value;
+    setAddressInput(val);
+    debouncedFetchAc(val);
+  };
+
+  // Fetch Live Nearby Amenities using centralized endpoint
+  const fetchLiveNearbyAmenities = useCallback(async (lat, lon, city, locality) => {
     setLoadingAmenities(true);
     try {
       const res = await axios.get('/api/places/nearby', {
-        params: { lat, lon: lng, city, locality, radius: 3000 }
+        params: { lat, lon, city, locality, radius: 3000 }
       });
-      const places = res.data?.places;
-      setLiveAmenities(Array.isArray(places) ? places : []);
+      const places = res.data?.places || [];
+      setNearbyAmenities(places);
     } catch (err) {
-      console.warn('[ValuationPage] Could not fetch live Google Places:', err);
-      setLiveAmenities([]);
+      console.warn('Nearby amenities fetch exception:', err);
+      setNearbyAmenities([]);
     } finally {
       setLoadingAmenities(false);
     }
   }, []);
 
-  // ─── Select a suggestion → fetch place details ─────────────────────────────
-  const handleSelectSuggestion = useCallback(async (suggestion) => {
-    const pred = suggestion?.placePrediction;
-    if (!pred) return;
-
-    const placeId = pred.placeId || '';
-    const text = pred.text?.text || pred.structuredFormat?.mainText?.text || '';
-
-    setAddressInput(text);
-    setSuggestions([]);
+  // Handle Autocomplete Item Selection
+  const handleSelectSuggestion = useCallback(async (placeId, text) => {
     setShowDropdown(false);
     setAcError('');
 
@@ -253,7 +218,10 @@ export default function ValuationPage() {
   const renderPreviewMap = useCallback((lat, lng, placesList = []) => {
     try {
       if (!window.google || !window.google.maps || !previewMapRef.current) return;
-      const center = { lat, lng };
+      
+      const safeLat = Number.isFinite(Number(lat)) ? Number(lat) : 17.4485;
+      const safeLng = Number.isFinite(Number(lng)) ? Number(lng) : 78.3908;
+      const center = { lat: safeLat, lng: safeLng };
 
       if (!previewMapInstanceRef.current) {
         previewMapInstanceRef.current = new window.google.maps.Map(previewMapRef.current, {
@@ -269,7 +237,10 @@ export default function ValuationPage() {
       }
       previewMarkersRef.current = [];
 
-      // Target Property Marker
+      const bounds = new window.google.maps.LatLngBounds();
+      bounds.extend(center);
+
+      // Target Property Marker (Purple)
       const targetMarker = new window.google.maps.Marker({
         position: center, map: previewMapInstanceRef.current, title: 'Target Location',
         icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
@@ -277,13 +248,15 @@ export default function ValuationPage() {
       });
       previewMarkersRef.current.push(targetMarker);
 
-      // Render Markers ONLY for AVAILABLE Google Places
+      // Render Markers for Google Places
       if (Array.isArray(placesList)) {
         placesList.forEach(pl => {
-          if (!pl || !pl.latitude || !pl.longitude) return;
+          if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
+          const pos = { lat: Number(pl.latitude), lng: Number(pl.longitude) };
+          bounds.extend(pos);
           const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
           const marker = new window.google.maps.Marker({
-            position: { lat: pl.latitude, lng: pl.longitude },
+            position: pos,
             map: previewMapInstanceRef.current,
             title: pl.name || 'Place',
             icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 5, fillColor: markerColor, fillOpacity: 0.85, strokeColor: '#fff', strokeWeight: 1 },
@@ -294,52 +267,31 @@ export default function ValuationPage() {
           marker.addListener('click', () => iw.open(previewMapInstanceRef.current, marker));
           previewMarkersRef.current.push(marker);
         });
+
+        if (placesList.length > 0) {
+          previewMapInstanceRef.current.fitBounds(bounds);
+        } else {
+          previewMapInstanceRef.current.setCenter(center);
+          previewMapInstanceRef.current.setZoom(14);
+        }
       }
     } catch (err) {
       console.warn('Preview map render exception caught safely:', err);
     }
   }, []);
 
-  // ─── Load Maps JS API Safely ──────────────────────────────────────────────
+  // ─── Load Maps JS API Safely via Centralized Loader ──────────────────────────────
   useEffect(() => {
-    let pollTimer = null;
-
-    const onReady = () => {
-      clearInterval(pollTimer);
-      setIsGoogleLoaded(true);
-      setMapsError('');
-    };
-
-    if (window.google && window.google.maps) {
-      onReady();
-      return;
-    }
-
-    if (!clientApiKey) {
-      setMapsError('VITE_GOOGLE_MAPS_API_KEY is missing in frontend/.env');
-      return;
-    }
-
-    window[GMAPS_CALLBACK] = onReady;
-    window.gm_authFailure = () => {
-      setMapsError('Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.');
-    };
-
-    if (!document.querySelector('script[data-gmaps]')) {
-      const script = document.createElement('script');
-      script.setAttribute('data-gmaps', 'true');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&libraries=places&callback=${GMAPS_CALLBACK}`;
-      script.async = true;
-      script.onerror = () => setMapsError('Google Maps API failed to load.');
-      document.head.appendChild(script);
-    }
-
-    pollTimer = setInterval(() => {
-      if (window.google && window.google.maps) onReady();
-    }, 300);
-
-    return () => clearInterval(pollTimer);
-  }, [clientApiKey]);
+    loadGoogleMapsScript()
+      .then(() => {
+        setIsGoogleLoaded(true);
+        setMapsError('');
+      })
+      .catch(err => {
+        setIsGoogleLoaded(false);
+        setMapsError(err.message || 'Google Maps failed to load.');
+      });
+  }, []);
 
   // Initial live places fetch
   useEffect(() => {
@@ -349,114 +301,156 @@ export default function ValuationPage() {
   // Update preview map when coords or amenities update
   useEffect(() => {
     if (isGoogleLoaded && previewMapRef.current) {
-      renderPreviewMap(form.latitude, form.longitude, liveAmenities);
+      renderPreviewMap(form.latitude, form.longitude, nearbyAmenities);
     }
-  }, [isGoogleLoaded, form.latitude, form.longitude, liveAmenities, renderPreviewMap]);
+  }, [isGoogleLoaded, form.latitude, form.longitude, nearbyAmenities, renderPreviewMap]);
 
-  // ─── Form helpers ──────────────────────────────────────────────────────────
-  const handleChange = (k, v) => {
-    const updated = { ...form, [k]: v };
-    if (k === 'city') {
-      const coords = CITY_COORDS[v] || [17.4965, 78.4014];
-      updated.latitude = coords[0]; updated.longitude = coords[1];
-      updated.locality = LOCALITIES[v]?.[0] || '';
-      setAddressInput(''); setSuggestions([]); setShowDropdown(false);
-      fetchLiveNearbyAmenities(coords[0], coords[1], v, updated.locality);
-    }
-    setForm(updated);
+  // Handle City Selection Change
+  const handleCityChange = (e) => {
+    const newCity = e.target.value;
+    const newLocality = LOCALITIES[newCity]?.[0] || '';
+    const coords = CITY_COORDS[newCity] || [17.4485, 78.3908];
+    setForm(prev => ({
+      ...prev, city: newCity, locality: newLocality,
+      latitude: coords[0], longitude: coords[1],
+    }));
+    fetchLiveNearbyAmenities(coords[0], coords[1], newCity, newLocality);
   };
 
-  const handlePredict = async () => {
-    setLoading(true); setError(''); setResult(null);
+  // Handle Locality Selection Change
+  const handleLocalityChange = (e) => {
+    const newLocality = e.target.value;
+    setForm(prev => ({ ...prev, locality: newLocality }));
+    axios.get('/api/location/geocode', { params: { address: `${newLocality}, ${form.city}` } })
+      .then(res => {
+        if (res.data?.latitude && res.data?.longitude) {
+          setForm(prev => ({ ...prev, latitude: res.data.latitude, longitude: res.data.longitude }));
+          fetchLiveNearbyAmenities(res.data.latitude, res.data.longitude, form.city, newLocality);
+        }
+      })
+      .catch(() => {
+        fetchLiveNearbyAmenities(form.latitude, form.longitude, form.city, newLocality);
+      });
+  };
+
+  // Submit Valuation Request
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setResult(null);
+    setForecast(null);
+
     try {
-      const isPlot = form.property_type === 'Plot';
-      const res = await axios.post('/api/predict', {
-        ...form,
-        area_sqft: parseFloat(form.area_sqft),
-        bedrooms: isPlot ? 0 : parseInt(form.bedrooms),
-        bathrooms: isPlot ? 0 : parseInt(form.bathrooms),
-        floor: isPlot ? 0 : parseInt(form.floor),
-        age: isPlot ? 0 : parseInt(form.age),
-        parking: isPlot ? 'No' : form.parking,
-        furnishing: isPlot ? 'Unfurnished' : form.furnishing,
-        latitude: parseFloat(form.latitude),
-        longitude: parseFloat(form.longitude),
-        address_str: addressInput || undefined,
-      });
+      const res = await axios.post('/api/predict', form);
       setResult(res.data);
-      setForecastLoading(true);
-      const fRes = await axios.post('/api/forecast', {
-        city: form.city, locality: form.locality, current_price: res.data.predicted_price,
-      });
-      setForecast(fRes.data);
+
+      if (res.data?.nearbyAmenities) {
+        setNearbyAmenities(res.data.nearbyAmenities);
+      }
+
+      fetchForecast(res.data.estimatedValue || res.data.predicted_price);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Valuation request failed. Please check parameters.');
+      setError(err.response?.data?.detail || 'Valuation service temporarily unavailable.');
     } finally {
-      setLoading(false); setForecastLoading(false);
+      setLoading(false);
     }
   };
 
-  // ─── Shared Places Source & Client-Side Filtering ─────────────────────────
-  const rawList = result?.nearbyAmenities || liveAmenities;
-  const allAmenities = Array.isArray(rawList) ? rawList : [];
-
-  // Determine available category groups present in data
-  const availableGroups = new Set();
-  allAmenities.forEach(pl => {
-    const grp = pl.group || CATEGORY_GROUP_MAP[pl.category] || 'Essentials';
-    availableGroups.add(grp);
-  });
-  const availableFilterTabs = ['All', ...Array.from(availableGroups)];
-
-  // Filter amenities 100% client-side
-  const filteredAmenities = selectedFilterGroup === 'All'
-    ? allAmenities
-    : allAmenities.filter(pl => {
-        const grp = pl.group || CATEGORY_GROUP_MAP[pl.category] || 'Essentials';
-        return grp === selectedFilterGroup;
+  const fetchForecast = async (price) => {
+    setForecastLoading(true);
+    try {
+      const res = await axios.post('/api/forecast', {
+        city: form.city, locality: form.locality, current_price: price,
       });
+      setForecast(res.data);
+    } catch (err) {
+      console.warn('Forecast error:', err);
+    } finally {
+      setForecastLoading(false);
+    }
+  };
 
-  // Unique categories currently displayed (for dynamic legend)
+  const formatPrice = (price) => {
+    if (!price) return '₹0';
+    if (price >= 10000000) return `₹${(price / 10000000).toFixed(2)} Cr`;
+    if (price >= 100000) return `₹${(price / 100000).toFixed(2)} Lakh`;
+    return `₹${Number(price).toLocaleString('en-IN')}`;
+  };
+
+  // Categorize amenities into groups
+  const activeAmenitiesList = result?.nearbyAmenities?.length > 0 ? result.nearbyAmenities : nearbyAmenities;
+
+  const filteredAmenities = activeAmenitiesList.filter(pl => {
+    if (!pl) return false;
+    if (selectedFilterGroup === 'All') return true;
+    const grp = CATEGORY_GROUP_MAP[pl.category] || pl.group || 'Essentials';
+    return grp === selectedFilterGroup;
+  });
+
+  const availableFilterTabs = ['All'].concat(
+    Array.from(new Set(activeAmenitiesList.map(pl => CATEGORY_GROUP_MAP[pl.category] || pl.group || 'Essentials').filter(Boolean)))
+  );
+
   const activeCategories = Array.from(new Set(filteredAmenities.map(pl => pl.category).filter(Boolean)));
 
-  // ─── Synchronized Result Map Renderer with Bounds & InfoWindows ────────────
-  useEffect(() => {
+  // ─── Synchronized Result Map Renderer with DOM Detach Check & Bounds ────────────
+  const renderResultMap = useCallback(() => {
     try {
-      if (result && window.google && window.google.maps && mapContainerRef.current) {
-        const targetLatLng = { lat: result.propertyCoordinates?.latitude || form.latitude, lng: result.propertyCoordinates?.longitude || form.longitude };
+      if (!window.google || !window.google.maps || !mapContainerRef.current) return;
 
-        if (!googleMapInstance.current) {
-          googleMapInstance.current = new window.google.maps.Map(mapContainerRef.current, {
-            center: targetLatLng, zoom: 14, styles: MAP_DARK_STYLE,
-          });
+      const rawLat = result?.propertyCoordinates?.latitude ?? form.latitude;
+      const rawLng = result?.propertyCoordinates?.longitude ?? form.longitude;
+      const safeLat = Number.isFinite(Number(rawLat)) ? Number(rawLat) : 17.4485;
+      const safeLng = Number.isFinite(Number(rawLng)) ? Number(rawLng) : 78.3908;
+      const targetLatLng = { lat: safeLat, lng: safeLng };
+
+      // Handle DOM unmount / remount detach check for conditional result container
+      if (googleMapInstance.current && googleMapInstance.current.getDiv) {
+        try {
+          if (googleMapInstance.current.getDiv() !== mapContainerRef.current) {
+            googleMapInstance.current = null;
+          }
+        } catch (e) {
+          googleMapInstance.current = null;
         }
-        const map = googleMapInstance.current;
+      }
 
-        // Clear existing markers safely
-        if (Array.isArray(resultMarkersRef.current)) {
-          resultMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
-        }
-        resultMarkersRef.current = [];
-
-        const bounds = new window.google.maps.LatLngBounds();
-        bounds.extend(targetLatLng);
-
-        // Target Property Marker
-        const targetMarker = new window.google.maps.Marker({
-          position: targetLatLng, map, title: 'Target Property',
-          icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
-          zIndex: 999
+      if (!googleMapInstance.current) {
+        googleMapInstance.current = new window.google.maps.Map(mapContainerRef.current, {
+          center: targetLatLng, zoom: 14, styles: MAP_DARK_STYLE, zoomControl: true,
         });
-        const targetIw = new window.google.maps.InfoWindow({
-          content: `<div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:200px;"><strong style="color:#6d28d9;">Target Property</strong><br/><span style="font-size:11px;color:#475569;">${form.locality}, ${form.city}</span></div>`
-        });
-        targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
-        resultMarkersRef.current.push(targetMarker);
+      }
 
-        // Filtered Nearby Google Place Markers
+      const map = googleMapInstance.current;
+      map.setCenter(targetLatLng);
+
+      // Clear existing result markers
+      if (Array.isArray(resultMarkersRef.current)) {
+        resultMarkersRef.current.forEach(m => m && m.setMap && m.setMap(null));
+      }
+      resultMarkersRef.current = [];
+
+      const bounds = new window.google.maps.LatLngBounds();
+      bounds.extend(targetLatLng);
+
+      // Target Property Marker (Purple)
+      const targetMarker = new window.google.maps.Marker({
+        position: targetLatLng, map, title: 'Target Location',
+        icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: '#8b5cf6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5 },
+        zIndex: 999
+      });
+      const targetIw = new window.google.maps.InfoWindow({
+        content: `<div style="color:#0f172a;font-family:sans-serif;padding:6px;max-width:200px;"><strong style="color:#6d28d9;">Target Location</strong><br/><span style="font-size:11px;color:#475569;">${form.locality}, ${form.city}</span></div>`
+      });
+      targetMarker.addListener('click', () => targetIw.open(map, targetMarker));
+      resultMarkersRef.current.push(targetMarker);
+
+      // Render Markers for filteredAmenities
+      if (Array.isArray(filteredAmenities)) {
         filteredAmenities.forEach(pl => {
-          if (!pl || !pl.latitude || !pl.longitude) return;
-          const pos = { lat: pl.latitude, lng: pl.longitude };
+          if (!pl || !Number.isFinite(Number(pl.latitude)) || !Number.isFinite(Number(pl.longitude))) return;
+          const pos = { lat: Number(pl.latitude), lng: Number(pl.longitude) };
           bounds.extend(pos);
 
           const markerColor = AMENITY_COLORS[pl.category] || '#3b82f6';
@@ -478,19 +472,24 @@ export default function ValuationPage() {
           marker.addListener('click', () => iw.open(map, marker));
           resultMarkersRef.current.push(marker);
         });
+      }
 
-        // Fit map bounds nicely to visible markers
-        if (filteredAmenities.length > 0) {
-          map.fitBounds(bounds);
-        } else {
-          map.setCenter(targetLatLng);
-          map.setZoom(14);
-        }
+      if (filteredAmenities && filteredAmenities.length > 0) {
+        map.fitBounds(bounds);
+      } else {
+        map.setCenter(targetLatLng);
+        map.setZoom(14);
       }
     } catch (err) {
       console.warn('Result map render exception caught safely:', err);
     }
   }, [result, filteredAmenities, form.latitude, form.longitude, form.city, form.locality]);
+
+  useEffect(() => {
+    if (isGoogleLoaded && mapContainerRef.current) {
+      renderResultMap();
+    }
+  }, [isGoogleLoaded, result, filteredAmenities, renderResultMap]);
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-white px-4 py-10">
@@ -500,237 +499,202 @@ export default function ValuationPage() {
           <p className="text-slate-400 mt-2">Geolocated AI pricing powered by live Google Places (New) Nearby Search</p>
         </div>
 
-        {mapsError && (
-          <div className="mb-6 flex items-start gap-3 bg-red-500/10 border border-red-500/30 text-red-300 p-4 rounded-xl text-sm">
-            <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
-            <div><p className="font-bold mb-1">Google Maps Warning</p><p>{mapsError}</p></div>
-          </div>
-        )}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          {/* Left Column: Input Form & Interactive Preview */}
+          <div className="lg:col-span-5 space-y-6">
+            <form onSubmit={handleSubmit} className="glass-panel p-6 rounded-2xl border border-white/10 space-y-5">
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <Compass className="h-5 w-5 text-violet-400" /> Property Specifications
+              </h2>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-          {/* ── Left Column: Property Details Form ─────────────────────────── */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-5">
-              <h2 className="text-lg font-bold text-white">Property Details</h2>
+              {/* Address Autocomplete Search Input */}
+              <div className="relative">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Search Address / Location (Google Autocomplete)</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={addressInput}
+                    onChange={handleAddressInputChange}
+                    placeholder="e.g. Miyapur, Hyderabad or Gachibowli..."
+                    className="w-full bg-slate-900/90 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 transition pl-9"
+                  />
+                  <Search className="h-4 w-4 text-slate-400 absolute left-3 top-3" />
+                  {isSearchingAc && <Loader2 className="h-4 w-4 animate-spin text-violet-400 absolute right-3 top-3" />}
+                </div>
 
-              {/* ── Custom Address Autocomplete ── */}
-              <div>
-                <label className="text-xs font-semibold text-violet-400 uppercase tracking-wider mb-1 block">
-                  Address / Google Location Search
-                </label>
-
-                <div className="relative" ref={dropdownRef}>
-                  <div className="relative">
-                    <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500 pointer-events-none z-10" />
-                    <input
-                      id="address-autocomplete-input"
-                      type="text"
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Search: Gachibowli, Miyapur, Madhapur, Velachery..."
-                      value={addressInput}
-                      onChange={e => {
-                        setAddressInput(e.target.value);
-                        setAcError('');
-                        debouncedFetch(e.target.value);
-                      }}
-                      onKeyDown={e => {
-                        if (e.key === 'Escape') { setShowDropdown(false); setSuggestions([]); }
-                      }}
-                      onFocus={() => { if (Array.isArray(suggestions) && suggestions.length > 0) setShowDropdown(true); }}
-                      className="w-full bg-slate-950/60 border border-white/10 rounded-xl pl-10 pr-10 py-3 text-sm text-white focus:outline-none focus:border-violet-500 placeholder:text-slate-500 transition-colors duration-200"
-                    />
-                    {loadingSuggestions ? (
-                      <Loader2 className="absolute right-3.5 top-3.5 h-4 w-4 text-violet-400 animate-spin" />
-                    ) : addressInput ? (
-                      <button
-                        onClick={() => { setAddressInput(''); setSuggestions([]); setShowDropdown(false); }}
-                        className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 transition"
+                {/* Autocomplete Suggestions Dropdown */}
+                {showDropdown && suggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-white/15 rounded-xl shadow-2xl z-50 max-h-60 overflow-y-auto">
+                    {suggestions.map((item, idx) => (
+                      <div
+                        key={item.place_id || idx}
+                        onClick={() => handleSelectSuggestion(item.place_id, item.description)}
+                        className="px-4 py-2.5 hover:bg-violet-600/20 cursor-pointer text-xs text-slate-200 flex items-center gap-2 border-b border-white/5 last:border-none transition"
                       >
-                        <X className="h-4 w-4" />
-                      </button>
-                    ) : null}
+                        <MapPin className="h-3.5 w-3.5 text-violet-400 flex-shrink-0" />
+                        <span className="truncate">{item.description}</span>
+                      </div>
+                    ))}
                   </div>
-
-                  {/* Dropdown suggestions */}
-                  {showDropdown && Array.isArray(suggestions) && suggestions.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-violet-500/20 shadow-2xl shadow-black/50 overflow-hidden z-50"
-                      style={{ background: '#1a2235' }}>
-                      {suggestions.map((s, idx) => {
-                        const pred = s?.placePrediction;
-                        const main = pred?.structuredFormat?.mainText?.text || pred?.text?.text || '';
-                        const secondary = pred?.structuredFormat?.secondaryText?.text || '';
-                        return (
-                          <button
-                            key={pred?.placeId || idx}
-                            onMouseDown={e => { e.preventDefault(); handleSelectSuggestion(s); }}
-                            className="w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-violet-500/10 transition-colors duration-150 border-b border-white/5 last:border-0"
-                          >
-                            <MapPin className="h-4 w-4 text-violet-400 flex-shrink-0 mt-0.5" />
-                            <div className="min-w-0">
-                              <p className="text-sm text-white font-medium truncate">{main}</p>
-                              {secondary && <p className="text-xs text-slate-400 truncate mt-0.5">{secondary}</p>}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {acError ? (
-                  <p className="text-[10px] text-amber-400 mt-1">⚠ {acError}</p>
-                ) : (
-                  <p className="text-[10px] text-emerald-500/70 mt-1">
-                    ✓ Connected to Google Places API (New)
-                  </p>
                 )}
+                {acError && <p className="text-[11px] text-amber-400 mt-1">{acError}</p>}
               </div>
 
-              {/* ── Live Preview Map ── */}
-              <div>
-                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1 block">Location & Places Preview</label>
-                <div ref={previewMapRef} id="preview-map-container"
-                  className="h-44 rounded-xl overflow-hidden border border-white/5 relative z-0 bg-slate-900 flex items-center justify-center">
-                  {!isGoogleLoaded && (
-                    <div className="text-slate-500 text-xs flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Google Map...
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* ── City / Locality / Type dropdowns ── */}
-              {[
-                { label: 'City', key: 'city', opts: CITIES },
-                { label: 'Locality', key: 'locality', opts: LOCALITIES[form.city] || [] },
-                { label: 'Property Type', key: 'property_type', opts: TYPES },
-                { label: 'Furnishing', key: 'furnishing', opts: FURNISHING },
-                { label: 'Parking', key: 'parking', opts: ['Yes', 'No'] },
-              ].filter(({ key }) => !(form.property_type === 'Plot' && (key === 'furnishing' || key === 'parking')))
-              .map(({ label, key, opts }) => (
-                <div key={key}>
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1 block">{label}</label>
-                  <select value={form[key]} onChange={e => handleChange(key, e.target.value)}
-                    className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-violet-500 cursor-pointer">
-                    {opts.map(o => <option key={o} value={o} className="bg-slate-900">{o}</option>)}
+              {/* City & Locality Controls */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">City</label>
+                  <select value={form.city} onChange={handleCityChange} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                    {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
-              ))}
-
-              {/* ── Numeric inputs ── */}
-              {[
-                { label: 'Area (sqft)', key: 'area_sqft', min: 100, max: 10000 },
-                { label: 'Bedrooms (BHK)', key: 'bedrooms', min: 1, max: 10 },
-                { label: 'Bathrooms', key: 'bathrooms', min: 1, max: 8 },
-                { label: 'Floor', key: 'floor', min: 0, max: 50 },
-                { label: 'Property Age (years)', key: 'age', min: 0, max: 50 },
-                { label: 'Latitude', key: 'latitude', step: 0.0001 },
-                { label: 'Longitude', key: 'longitude', step: 0.0001 },
-              ].filter(({ key }) => !(form.property_type === 'Plot' && ['bedrooms', 'bathrooms', 'floor', 'age'].includes(key)))
-              .map(({ label, key, min, max, step }) => (
-                <div key={key}>
-                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1 block">{label}</label>
-                  <input type="number" value={form[key]} min={min} max={max} step={step || 1}
-                    onChange={e => handleChange(key, e.target.value)}
-                    className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-violet-500" />
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Locality</label>
+                  <select value={form.locality} onChange={handleLocalityChange} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                    {(LOCALITIES[form.city] || []).map(l => <option key={l} value={l}>{l}</option>)}
+                  </select>
                 </div>
-              ))}
+              </div>
+
+              {/* Coordinates Indicator */}
+              <div className="flex items-center justify-between text-[11px] bg-slate-900/60 p-2.5 rounded-xl border border-white/5 text-slate-400">
+                <span className="flex items-center gap-1.5 font-mono">
+                  <MapPin className="h-3.5 w-3.5 text-violet-400" />
+                  {form.latitude?.toFixed(4)}, {form.longitude?.toFixed(4)}
+                </span>
+                <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> Geocoded
+                </span>
+              </div>
+
+              {/* Interactive Location Preview Map */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center text-xs text-slate-300">
+                  <span className="font-semibold flex items-center gap-1.5"><Compass className="h-3.5 w-3.5 text-violet-400" /> Location Preview Map</span>
+                  {nearbyAmenities.length > 0 && (
+                    <span className="text-[10px] text-violet-400 font-semibold">{nearbyAmenities.length} Google Places Loaded</span>
+                  )}
+                </div>
+                <div
+                  ref={previewMapRef}
+                  id="preview-map-container"
+                  className="h-44 rounded-xl overflow-hidden border border-white/10 bg-slate-900 relative z-0 flex items-center justify-center"
+                >
+                  {!isGoogleLoaded && (
+                    <div className="text-slate-500 text-xs flex items-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Map...
+                    </div>
+                  )}
+                </div>
+                {mapsError && <p className="text-[11px] text-amber-400 font-medium">{mapsError}</p>}
+              </div>
+
+              {/* Property Details Grid */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Property Type</label>
+                  <select value={form.property_type} onChange={e => setForm({ ...form, property_type: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                    {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Area (sq.ft)</label>
+                  <input type="number" value={form.area_sqft} onChange={e => setForm({ ...form, area_sqft: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Bedrooms (BHK)</label>
+                  <input type="number" value={form.bedrooms} onChange={e => setForm({ ...form, bedrooms: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Bathrooms</label>
+                  <input type="number" value={form.bathrooms} onChange={e => setForm({ ...form, bathrooms: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Floor Level</label>
+                  <input type="number" value={form.floor} onChange={e => setForm({ ...form, floor: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Property Age (Yrs)</label>
+                  <input type="number" value={form.age} onChange={e => setForm({ ...form, age: parseInt(e.target.value) || 0 })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Parking</label>
+                  <select value={form.parking} onChange={e => setForm({ ...form, parking: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">Furnishing</label>
+                  <select value={form.furnishing} onChange={e => setForm({ ...form, furnishing: e.target.value })} className="w-full bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-violet-500">
+                    {FURNISHING.map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+              </div>
 
               {error && (
-                <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">
-                  <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />{error}
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-300 text-xs rounded-xl flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" /> {error}
                 </div>
               )}
 
-              <button onClick={handlePredict} disabled={loading}
-                className="w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition shadow-lg shadow-violet-600/25">
-                {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Brain className="h-5 w-5" />}
-                {loading ? 'Evaluating Model...' : 'Predict Price'}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-sm rounded-xl shadow-lg shadow-violet-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Running ML Valuation...
+                  </>
+                ) : (
+                  <>
+                    <Brain className="h-4 w-4" /> Predict Price
+                  </>
+                )}
               </button>
-            </div>
+            </form>
           </div>
 
-          {/* ── Right Column: Results & Complete Integrated Location Audit ────────── */}
-          <div className="lg:col-span-3 space-y-6">
+          {/* Right Column: Prediction Results & Interactive Location Audit */}
+          <div className="lg:col-span-7">
             {result ? (
-              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.4 }} className="space-y-6">
-
-                {/* Estimated Value Card */}
-                <div className="glass-panel p-6 rounded-2xl border border-violet-500/30 grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="text-center md:text-left md:border-r border-white/10 md:pr-6 flex flex-col justify-center">
-                    <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Estimated Value</p>
-                    <p className="text-4xl font-extrabold text-transparent bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text mb-2">
-                      {formatPrice(result.estimatedValue || result.predicted_price)}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      Range: <span className="font-bold text-slate-200">{formatPrice(result.minimumEstimatedValue)} – {formatPrice(result.maximumEstimatedValue)}</span>
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 text-center">
-                    <div className="p-3 bg-slate-800/40 rounded-xl flex flex-col justify-center">
-                      <p className="text-[10px] text-slate-400 font-semibold mb-0.5">Price / Sq.Ft</p>
-                      <p className="text-sm font-extrabold text-violet-400">{formatPrice(result.pricePerSqFt)}</p>
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+                {/* Main Estimated Valuation Card */}
+                <div className="glass-panel p-6 rounded-2xl border border-violet-500/30 bg-gradient-to-br from-slate-900 via-violet-950/20 to-slate-900 shadow-xl relative overflow-hidden">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <span className="text-xs font-semibold text-violet-400 uppercase tracking-wider">Estimated Market Value</span>
+                      <h2 className="text-3xl font-extrabold text-white mt-1">
+                        {formatPrice(result.estimatedValue || result.predicted_price)}
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Range: <span className="font-semibold text-slate-200">{formatPrice(result.minimumEstimatedValue)}</span> - <span className="font-semibold text-slate-200">{formatPrice(result.maximumEstimatedValue)}</span>
+                      </p>
                     </div>
-                    <div className="p-3 bg-slate-800/40 rounded-xl flex flex-col justify-center">
-                      <p className="text-[10px] text-slate-400 font-semibold mb-0.5">Confidence</p>
-                      <p className="text-sm font-extrabold text-emerald-400">{((result.confidenceScore || 0.8) * 100).toFixed(0)}%</p>
+                    <div className="text-right bg-violet-600/20 border border-violet-500/30 px-3 py-2 rounded-xl">
+                      <p className="text-[10px] text-violet-300 font-semibold">Valuation Confidence</p>
+                      <p className="text-lg font-extrabold text-white">{((result.confidenceScore || result.confidence_score || 0.85) * 100).toFixed(0)}%</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/10 text-center">
+                    <div className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5">
+                      <p className="text-[10px] text-slate-400">Price / sq.ft</p>
+                      <p className="text-xs font-bold text-white mt-0.5">₹{(result.pricePerSqFt || (result.predicted_price / form.area_sqft)).toFixed(0)}</p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5">
+                      <p className="text-[10px] text-slate-400">Investment Score</p>
+                      <p className="text-xs font-bold text-emerald-400 mt-0.5">{result.investment_score || 78}/100</p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-slate-900/60 border border-white/5">
+                      <p className="text-[10px] text-slate-400">Risk Profile</p>
+                      <p className="text-xs font-bold text-amber-400 mt-0.5">{result.risk_score || 35}/100</p>
                     </div>
                   </div>
                 </div>
 
-                {/* Score Intelligence Cards */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="glass-panel p-4 rounded-2xl border border-violet-500/20 text-center">
-                    <Compass className="h-6 w-6 text-violet-400 mx-auto mb-1" />
-                    <p className="text-[10px] text-slate-400 font-medium">Location Score</p>
-                    <p className="text-xl font-extrabold text-violet-400">{result.locationScore || 70}/100</p>
-                  </div>
-                  <div className="glass-panel p-4 rounded-2xl border border-emerald-500/20 text-center">
-                    <TrendingUp className="h-6 w-6 text-emerald-400 mx-auto mb-1" />
-                    <p className="text-[10px] text-slate-400 font-medium">Investment</p>
-                    <p className="text-xl font-extrabold text-emerald-400">{result.investment_score || 75}/100</p>
-                  </div>
-                  <div className="glass-panel p-4 rounded-2xl border border-red-500/20 text-center">
-                    <ShieldAlert className="h-6 w-6 text-red-400 mx-auto mb-1" />
-                    <p className="text-[10px] text-slate-400 font-medium">Risk Score</p>
-                    <p className="text-xl font-extrabold text-red-400">{result.risk_score || 25}/100</p>
-                  </div>
-                </div>
-
-                {/* Valuation Factor Audit */}
-                {result.explanation_factors && (
-                  <div className="glass-panel p-6 rounded-2xl border border-white/10">
-                    <h3 className="font-bold text-white mb-4 flex items-center gap-2">
-                      <Sparkles className="h-5 w-5 text-violet-400" /> Valuation Factor Audit
-                    </h3>
-                    <div className="space-y-3 text-sm">
-                      {[
-                        { label: 'Base Locality Value', val: result.explanation_factors.base_value, desc: 'Average sqft cost baseline' },
-                        { label: 'Area & Structural Adjustment', val: result.explanation_factors.area_adjustment, desc: 'Floor, furnishing & configuration premium' },
-                        { label: 'Comparable Listings Proximity', val: result.explanation_factors.comparables_adjustment, desc: 'Distance-weighted 3km matches' },
-                        { label: 'Surrounding Amenities Premium', val: result.explanation_factors.amenities_adjustment, desc: 'Google Places schools, hospitals & transit density' },
-                        { label: 'Market Trend Factor', val: result.explanation_factors.market_trend_adjustment, desc: 'Locality growth index' },
-                      ].map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-start py-2.5 border-b border-white/5 last:border-0">
-                          <div>
-                            <p className="font-semibold text-slate-200">{item.label}</p>
-                            <p className="text-xs text-slate-500">{item.desc}</p>
-                          </div>
-                          <p className={`font-mono font-bold ${(item.val || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {(item.val || 0) >= 0 ? '+' : ''}{formatPrice(item.val)}
-                          </p>
-                        </div>
-                      ))}
-                      <div className="pt-3 flex justify-between items-center border-t border-white/10 font-bold">
-                        <p className="text-white text-base">Final Estimated Price</p>
-                        <p className="text-violet-400 text-lg font-mono">{formatPrice(result.explanation_factors.final_estimated_value)}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── COMPLETE INTEGRATED: Interactive Google Maps Location Audit ── */}
+                {/* Interactive Google Maps Location Audit Panel */}
                 <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-5">
                   <div className="flex justify-between items-start flex-wrap gap-2">
                     <div>
@@ -755,7 +719,7 @@ export default function ValuationPage() {
                     )}
                   </div>
 
-                  {/* 2. Dynamic Legend (Renders ONLY categories with markers currently plottable) */}
+                  {/* 2. Dynamic Legend */}
                   <div className="flex flex-wrap gap-3 text-xs text-slate-400 pt-1">
                     <span className="flex items-center gap-1 font-semibold text-violet-300">
                       <span className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} /> Target Property
@@ -767,7 +731,7 @@ export default function ValuationPage() {
                     ))}
                   </div>
 
-                  {/* 3. Compact Category Filter Tabs (Renders ONLY available groups) */}
+                  {/* 3. Compact Category Filter Tabs */}
                   {availableFilterTabs.length > 1 && (
                     <div className="flex flex-wrap gap-1 bg-slate-950/80 p-1.5 rounded-xl border border-white/5">
                       {availableFilterTabs.map(grp => (
@@ -782,7 +746,7 @@ export default function ValuationPage() {
                     </div>
                   )}
 
-                  {/* 4. Integrated Nearby Amenities List (Synchronized with Filter) */}
+                  {/* 4. Integrated Nearby Amenities List */}
                   <div className="space-y-3 pt-2 border-t border-white/5">
                     <div className="flex justify-between items-center">
                       <h4 className="font-bold text-white text-sm">
@@ -830,8 +794,6 @@ export default function ValuationPage() {
                     <span>Updated: {result?.lastUpdated || new Date().toLocaleTimeString()}</span>
                   </div>
                 </div>
-
-
 
                 {/* Price Forecast */}
                 {forecast && (
@@ -969,6 +931,11 @@ export default function ValuationPage() {
                         ))}
                       </div>
                     )}
+                  </div>
+
+                  <div className="pt-2 flex justify-between items-center text-[10px] text-slate-500 border-t border-white/5">
+                    <span>Data source: Google Places API (New)</span>
+                    <span>Updated: {new Date().toLocaleTimeString()}</span>
                   </div>
                 </div>
               </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { motion } from 'framer-motion';
 import { Scale, TrendingUp, ShieldAlert, IndianRupee, Maximize, BedDouble, Bath, Star, AlertCircle, Loader2, MapPin } from 'lucide-react';
+import { loadGoogleMapsScript, getGoogleMapsApiKey } from '../utils/googleMapsLoader';
 
 const CITIES_PRESETS = {
   Hyderabad: {
@@ -34,8 +35,6 @@ const MAP_DARK_STYLE = [
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#111827' }] },
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
 ];
-
-const GMAPS_CALLBACK = '__gmapsReady_compare';
 
 function PropertySelector({ label, value, onChange }) {
   return (
@@ -91,9 +90,9 @@ function CompareCol({ prop, isBetter, label, distance }) {
 }
 
 export default function ComparePage() {
-  const clientApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+  const clientApiKey = getGoogleMapsApiKey();
 
-  const [activeTab, setActiveTab] = useState('id'); // 'id' or 'coordinates'
+  const [activeTab, setActiveTab] = useState('id');
   const [idA, setIdA] = useState('');
   const [idB, setIdB] = useState('');
   const [isGoogleLoaded, setIsGoogleLoaded] = useState(false);
@@ -109,37 +108,16 @@ export default function ComparePage() {
 
   const mapContainerRef = useRef(null);
 
-  // ─── Load Google Maps JS API ──────────────────────────────────────────────
+  // ─── Load Google Maps JS API Safely ──────────────────────────────────────────────
   useEffect(() => {
-    let pollTimer = null;
-    const onReady = () => {
-      clearInterval(pollTimer);
-      setIsGoogleLoaded(true);
-    };
-
-    if (window.google && window.google.maps) {
-      onReady();
-      return;
-    }
-
-    if (clientApiKey) {
-      window[GMAPS_CALLBACK] = onReady;
-      window.gm_authFailure = () => {
-        setMapsError('Google Maps API Key authorization failed. Verify HTTP referrer restrictions in Google Cloud Console.');
-      };
-      if (!document.querySelector('script[data-gmaps]')) {
-        const script = document.createElement('script');
-        script.setAttribute('data-gmaps', 'true');
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${clientApiKey}&libraries=places&callback=${GMAPS_CALLBACK}`;
-        script.async = true;
-        document.head.appendChild(script);
-      }
-      pollTimer = setInterval(() => {
-        if (window.google && window.google.maps) onReady();
-      }, 300);
-    }
-    return () => clearInterval(pollTimer);
-  }, [clientApiKey]);
+    loadGoogleMapsScript()
+      .then(() => {
+        setIsGoogleLoaded(true);
+      })
+      .catch(err => {
+        setIsGoogleLoaded(false);
+      });
+  }, []);
 
   // ─── Render Google Map ────────────────────────────────────────────────────
   const renderMap = useCallback(() => {
@@ -148,44 +126,40 @@ export default function ComparePage() {
     const pb = result.property_b;
     if (!pa || !pb) return;
 
-    const center = { lat: (pa.latitude + pb.latitude) / 2.0, lng: (pa.longitude + pb.longitude) / 2.0 };
+    const safeLatA = Number.isFinite(Number(pa.latitude)) ? Number(pa.latitude) : 17.4485;
+    const safeLonA = Number.isFinite(Number(pa.longitude)) ? Number(pa.longitude) : 78.3908;
+    const safeLatB = Number.isFinite(Number(pb.latitude)) ? Number(pb.latitude) : 17.4965;
+    const safeLonB = Number.isFinite(Number(pb.longitude)) ? Number(pb.longitude) : 78.4014;
+
+    const center = { lat: (safeLatA + safeLatB) / 2.0, lng: (safeLonA + safeLonB) / 2.0 };
 
     const map = new window.google.maps.Map(mapContainerRef.current, {
-      center,
-      zoom: 11,
-      styles: MAP_DARK_STYLE,
-      zoomControl: true,
+      center, zoom: 12, styles: MAP_DARK_STYLE
     });
 
-    // Marker A (Red)
+    const bounds = new window.google.maps.LatLngBounds();
+
+    const posA = { lat: safeLatA, lng: safeLonA };
+    bounds.extend(posA);
     new window.google.maps.Marker({
-      position: { lat: pa.latitude, lng: pa.longitude },
-      map,
-      title: `Property A: ${pa.property_name || pa.locality}`,
+      position: posA, map, title: `Property A: ${pa.property_name}`,
       icon: {
         path: window.google.maps.SymbolPath.CIRCLE,
-        scale: 8,
-        fillColor: '#ef4444',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
+        scale: 9, fillColor: '#3b82f6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2
       }
     });
 
-    // Marker B (Orange)
+    const posB = { lat: safeLatB, lng: safeLonB };
+    bounds.extend(posB);
     new window.google.maps.Marker({
-      position: { lat: pb.latitude, lng: pb.longitude },
-      map,
-      title: `Property B: ${pb.property_name || pb.locality}`,
+      position: posB, map, title: `Property B: ${pb.property_name}`,
       icon: {
         path: window.google.maps.SymbolPath.CIRCLE,
-        scale: 8,
-        fillColor: '#f97316',
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
+        scale: 9, fillColor: '#10b981', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2
       }
     });
+
+    map.fitBounds(bounds);
   }, [result]);
 
   useEffect(() => {
@@ -194,34 +168,40 @@ export default function ComparePage() {
     }
   }, [isGoogleLoaded, result, renderMap]);
 
-  const handleApplyPreset = (cityKey) => {
-    const preset = CITIES_PRESETS[cityKey];
-    if (preset) {
-      setCoords({
-        lat_a: preset.lat_a, lon_a: preset.lon_a,
-        lat_b: preset.lat_b, lon_b: preset.lon_b
+  const handleCompareById = async (e) => {
+    e.preventDefault();
+    if (!idA || !idB) {
+      setError('Please enter both Property A ID and Property B ID.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const res = await axios.post('/api/compare', {
+        property_a_id: parseInt(idA),
+        property_b_id: parseInt(idB)
       });
+      setResult(res.data);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Comparison failed. Verify both Property IDs exist.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleCompare = async () => {
-    setLoading(true); setError(''); setResult(null);
+  const handleCompareByCoords = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setResult(null);
+
     try {
-      let res;
-      if (activeTab === 'id') {
-        if (!idA || !idB) { setError('Please enter both Property IDs.'); setLoading(false); return; }
-        res = await axios.post('/api/compare', { property_a_id: parseInt(idA), property_b_id: parseInt(idB) });
-      } else {
-        res = await axios.post('/api/compare/coordinates', {
-          lat_a: parseFloat(coords.lat_a),
-          lon_a: parseFloat(coords.lon_a),
-          lat_b: parseFloat(coords.lat_b),
-          lon_b: parseFloat(coords.lon_b)
-        });
-      }
+      const res = await axios.post('/api/compare/coordinates', coords);
       setResult(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Comparison failed. Please make sure you are logged in.');
+      setError(err.response?.data?.detail || 'Coordinate comparison failed.');
     } finally {
       setLoading(false);
     }
@@ -229,148 +209,114 @@ export default function ComparePage() {
 
   return (
     <div className="min-h-screen bg-[#0b0f19] text-white px-4 py-10">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-4">
-          <div>
-            <h1 className="text-4xl font-extrabold bg-gradient-to-r from-white to-violet-300 bg-clip-text text-transparent">Property Comparison</h1>
-            <p className="text-slate-400 mt-2">Side-by-side AI analysis of two properties with investment recommendation</p>
-          </div>
-          <div className="flex gap-2 bg-slate-900 p-1.5 rounded-xl border border-white/5">
-            <button onClick={() => { setActiveTab('id'); setResult(null); }}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'id' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-              Compare by ID
-            </button>
-            <button onClick={() => { setActiveTab('coordinates'); setResult(null); }}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${activeTab === 'coordinates' ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-white'}`}>
-              Compare by Coordinates (Lat/Lon)
-            </button>
-          </div>
+      <div className="max-w-6xl mx-auto space-y-8">
+        <div>
+          <h1 className="text-4xl font-extrabold bg-gradient-to-r from-white to-violet-300 bg-clip-text text-transparent flex items-center gap-3">
+            <Scale className="h-9 w-9 text-violet-400" /> Property Comparison Engine
+          </h1>
+          <p className="text-slate-400 mt-2">Side-by-side investment intelligence, risk profile, and spatial accessibility comparison</p>
         </div>
 
-        {/* Input Panel */}
-        <div className="glass-panel p-6 rounded-2xl border border-white/10 mb-8">
-          {activeTab === 'id' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-              <PropertySelector label="A" value={idA} onChange={setIdA} />
-              <div className="text-center">
-                <Scale className="h-10 w-10 text-violet-500 mx-auto mb-1" />
-                <p className="text-xs text-slate-500">VS</p>
-              </div>
-              <PropertySelector label="B" value={idB} onChange={setIdB} />
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-2 mb-2 items-center">
-                <span className="text-xs text-slate-500 uppercase tracking-wider font-semibold">City Coordinates Presets:</span>
-                {Object.keys(CITIES_PRESETS).map(c => (
-                  <button key={c} type="button" onClick={() => handleApplyPreset(c)}
-                    className="px-2.5 py-1 bg-slate-800 hover:bg-violet-600/30 text-xs text-slate-300 rounded border border-white/5 transition">
-                    {c}
-                  </button>
-                ))}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end text-sm">
-                <div className="md:col-span-2 grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Latitude A</label>
-                    <input type="number" step="0.0001" value={coords.lat_a} onChange={e => setCoords({ ...coords, lat_a: e.target.value })}
-                      className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Longitude A</label>
-                    <input type="number" step="0.0001" value={coords.lon_a} onChange={e => setCoords({ ...coords, lon_a: e.target.value })}
-                      className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none" />
-                  </div>
-                </div>
-                <div className="text-center md:col-span-1 py-2">
-                  <Scale className="h-8 w-8 text-violet-500 mx-auto" />
-                  <p className="text-xs text-slate-500 mt-1">VS</p>
-                </div>
-                <div className="md:col-span-2 grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Latitude B</label>
-                    <input type="number" step="0.0001" value={coords.lat_b} onChange={e => setCoords({ ...coords, lat_b: e.target.value })}
-                      className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider mb-1 block">Longitude B</label>
-                    <input type="number" step="0.0001" value={coords.lon_b} onChange={e => setCoords({ ...coords, lon_b: e.target.value })}
-                      className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-2.5 text-white focus:outline-none" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm mt-4">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />{error}
-            </div>
-          )}
-
-          <button onClick={handleCompare} disabled={loading}
-            className="mt-5 w-full py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-60 rounded-xl font-bold flex items-center justify-center gap-2 transition shadow-lg shadow-violet-600/25">
-            {loading ? <><Loader2 className="h-5 w-5 animate-spin" /> Comparing...</> : <><Scale className="h-5 w-5" /> Compare Properties</>}
+        {/* Tab Selection */}
+        <div className="flex justify-between items-center bg-slate-900/60 p-2 rounded-2xl border border-white/10 max-w-md">
+          <button
+            onClick={() => { setActiveTab('id'); setResult(null); setError(''); }}
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition ${activeTab === 'id' ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30' : 'text-slate-400 hover:text-white'}`}
+          >
+            Compare by Property ID
+          </button>
+          <button
+            onClick={() => { setActiveTab('coordinates'); setResult(null); setError(''); }}
+            className={`flex-1 py-2.5 rounded-xl font-bold text-xs transition ${activeTab === 'coordinates' ? 'bg-violet-600 text-white shadow-lg shadow-violet-600/30' : 'text-slate-400 hover:text-white'}`}
+          >
+            Compare by Coordinates
           </button>
         </div>
 
-        {/* Comparison Results */}
-        {result && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="space-y-6">
-            {/* AI Recommendation Banner */}
-            <div className="glass-panel p-5 rounded-2xl border border-violet-500/30 bg-violet-500/5">
-              <p className="text-sm font-medium text-slate-300">
-                <span className="text-violet-400 font-bold">AI Recommendation: </span>
-                {result.ai_recommendation}
-              </p>
+        {/* Form Sections */}
+        {activeTab === 'id' ? (
+          <form onSubmit={handleCompareById} className="glass-panel p-6 rounded-2xl border border-white/10 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <PropertySelector label="A" value={idA} onChange={setIdA} />
+              <PropertySelector label="B" value={idB} onChange={setIdB} />
+            </div>
+            {error && <div className="text-xs text-red-400 flex items-center gap-1.5"><AlertCircle className="h-4 w-4" /> {error}</div>}
+            <button type="submit" disabled={loading} className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm rounded-xl transition flex items-center justify-center gap-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />} Compare Listings
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleCompareByCoords} className="glass-panel p-6 rounded-2xl border border-white/10 space-y-4">
+            <div className="mb-2">
+              <label className="text-xs font-semibold text-slate-300 block mb-1">City Presets</label>
+              <div className="flex flex-wrap gap-2">
+                {Object.keys(CITIES_PRESETS).map(city => (
+                  <button
+                    key={city}
+                    type="button"
+                    onClick={() => setCoords(CITIES_PRESETS[city])}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-lg border border-white/5 transition"
+                  >
+                    {city}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* Side by Side */}
-            <div className="flex flex-col sm:flex-row gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 bg-slate-900/60 p-4 rounded-xl border border-white/5">
+                <p className="text-xs font-bold text-blue-400">Property A Coordinates</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" step="any" value={coords.lat_a} onChange={e => setCoords({ ...coords, lat_a: parseFloat(e.target.value) })} className="bg-slate-950 border border-white/10 rounded-lg p-2 text-xs text-white" placeholder="Lat A" />
+                  <input type="number" step="any" value={coords.lon_a} onChange={e => setCoords({ ...coords, lon_a: parseFloat(e.target.value) })} className="bg-slate-950 border border-white/10 rounded-lg p-2 text-xs text-white" placeholder="Lon A" />
+                </div>
+              </div>
+
+              <div className="space-y-2 bg-slate-900/60 p-4 rounded-xl border border-white/5">
+                <p className="text-xs font-bold text-emerald-400">Property B Coordinates</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" step="any" value={coords.lat_b} onChange={e => setCoords({ ...coords, lat_b: parseFloat(e.target.value) })} className="bg-slate-950 border border-white/10 rounded-lg p-2 text-xs text-white" placeholder="Lat B" />
+                  <input type="number" step="any" value={coords.lon_b} onChange={e => setCoords({ ...coords, lon_b: parseFloat(e.target.value) })} className="bg-slate-950 border border-white/10 rounded-lg p-2 text-xs text-white" placeholder="Lon B" />
+                </div>
+              </div>
+            </div>
+
+            {error && <div className="text-xs text-red-400 flex items-center gap-1.5"><AlertCircle className="h-4 w-4" /> {error}</div>}
+            <button type="submit" disabled={loading} className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm rounded-xl transition flex items-center justify-center gap-2">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scale className="h-4 w-4" />} Compare Coordinates
+            </button>
+          </form>
+        )}
+
+        {/* Results View */}
+        {result && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            {/* AI Recommendation Banner */}
+            <div className="glass-panel p-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/5">
+              <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <Star className="h-4 w-4" /> AI Comparative Recommendation
+              </h3>
+              <p className="text-sm text-slate-200 leading-relaxed">{result.ai_recommendation}</p>
+            </div>
+
+            {/* Side by Side Specs */}
+            <div className="flex flex-col md:flex-row gap-6">
               <CompareCol prop={result.property_a} isBetter={result.better_property === 'A'} label="A" distance={result.distance_a_km} />
               <CompareCol prop={result.property_b} isBetter={result.better_property === 'B'} label="B" distance={result.distance_b_km} />
             </div>
 
-            {/* Google Map Visualization */}
-            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-3">
-              <h2 className="text-lg font-bold text-white">Properties Location Map Comparison</h2>
-              <div ref={mapContainerRef} id="google-map-compare-container" className="h-72 rounded-xl overflow-hidden border border-white/5 bg-slate-900 relative">
+            {/* Comparison Map */}
+            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-4">
+              <h3 className="font-bold text-white text-base">Spatial Location Map</h3>
+              <div ref={mapContainerRef} className="h-72 rounded-xl overflow-hidden border border-white/5 bg-slate-900 relative">
                 {!isGoogleLoaded && (
-                  <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
-                    Loading Google Map...
+                  <div className="h-full flex items-center justify-center text-slate-500 text-xs gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin text-violet-400" /> Loading Spatial Map...
                   </div>
                 )}
               </div>
-              <div className="flex flex-wrap gap-4 text-xs text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3.5 h-3.5 rounded-full" style={{ backgroundColor: '#ef4444' }} />
-                  Property A: {result.property_a.property_name || result.property_a.locality}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3.5 h-3.5 rounded-full" style={{ backgroundColor: '#f97316' }} />
-                  Property B: {result.property_b.property_name || result.property_b.locality}
-                </span>
-              </div>
-            </div>
-
-            {/* Audit source tag */}
-            <div className="text-center text-xs text-slate-500 mt-6 flex items-center justify-center gap-4">
-              <span>Source: PropValue AI Location & Comparison Database</span>
-              <span>Last updated: {new Date().toLocaleDateString()}</span>
             </div>
           </motion.div>
-        )}
-
-        {!result && !loading && (
-          <div className="glass-panel p-12 rounded-2xl border border-white/10 text-center">
-            <Scale className="h-16 w-16 text-violet-600/40 mx-auto mb-4" />
-            <h3 className="text-lg font-bold text-slate-400 mb-2">Compare Properties Side-by-Side</h3>
-            <p className="text-sm text-slate-500">
-              {activeTab === 'id'
-                ? 'Enter two Property IDs from 1 to 10000 to trigger comparison.'
-                : 'Enter target Latitude and Longitude values or click one of the city presets above.'}
-            </p>
-          </div>
         )}
       </div>
     </div>
